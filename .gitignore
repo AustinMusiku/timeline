@@ -1,0 +1,6 @@
+/bin/
+/timeline
+*.test
+*.out
+.envrc
+.claude/settings.local.json
