@@ -23,30 +23,23 @@ type Request struct {
 }
 
 type Options struct {
-	// Repeat is how many times to run the whole sequence. Connections stay
-	// open between rounds, so the first round is cold and the rest are warm.
-	// Values below 1 mean 1.
+	// Repeat is how many times to run the whole sequence. Minimum 1.
 	Repeat int
-	// Concurrency is how many requests of a round may be in flight at once.
-	// Values below 1 mean 1, which sends them strictly one after another.
+	// Concurrency is how many requests may be in flight at once. Minimum 1.
 	Concurrency int
 	// Timeout bounds each request, body included. Zero means no limit.
 	Timeout time.Duration
 }
 
 // Run sends reqs in order, Repeat times over, and returns one entry per
-// request sent. A request that fails is recorded in its entry and the run
-// carries on. Run itself fails only when the sequence cannot be sent at all,
-// or when ctx is cancelled, in which case it also returns the entries
-// collected up to that point.
-//
-// Every run starts with no open connections. Redirects are recorded, not
-// followed.
+// request sent. A failed request is recorded in its entry. If ctx is
+// cancelled, Run returns the entries so far along with the error.
+// Redirects are not followed.
 func Run(ctx context.Context, reqs []Request, opts Options) (*record.Run, error) {
 	return run(ctx, http.DefaultTransport.(*http.Transport).Clone(), reqs, opts)
 }
 
-// run is Run on a transport of the caller's choosing, which it takes over.
+// run is Run on the given transport.
 func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) (*record.Run, error) {
 	repeat, concurrency := max(opts.Repeat, 1), max(opts.Concurrency, 1)
 
@@ -59,12 +52,10 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 		tmpls[i] = req
 	}
 
-	// Left on, the transport would decode gzip itself and hide both the
-	// transferred size and the Content-Encoding header.
+	// Keep bodies as sent, so sizes and Content-Encoding are the real ones.
 	tr.DisableCompression = true
 
-	// Without this, connections beyond the default of two per host would be
-	// closed after each round and the next round would not be warm.
+	// Keep every connection of a round open for the next one.
 	tr.MaxIdleConnsPerHost = max(concurrency, http.DefaultMaxIdleConnsPerHost)
 	defer tr.CloseIdleConnections()
 
@@ -84,8 +75,7 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 send:
 	for round := range repeat {
 		for seq, tmpl := range tmpls {
-			// In-flight requests share ctx, so a slot frees up promptly
-			// after a cancel and this never blocks for long.
+			// After a cancel, in-flight requests fail fast and free a slot.
 			slots <- struct{}{}
 			if ctx.Err() != nil {
 				break send
@@ -100,8 +90,7 @@ send:
 				e.Seq, e.Round = seq, round
 			})
 		}
-		// A round finishes before the next begins, so that the next one
-		// finds its connections idle.
+		// Finish the round so the next one finds its connections idle.
 		wg.Wait()
 	}
 	wg.Wait()
@@ -120,8 +109,7 @@ func newRequest(r Request) (*http.Request, error) {
 	if r.Header != nil {
 		req.Header = r.Header.Clone()
 	}
-	// With the transport's own gzip handling off, offer gzip by hand so
-	// servers answer as they would to an ordinary client.
+	// The transport no longer offers gzip itself.
 	if req.Header.Get("Accept-Encoding") == "" {
 		req.Header.Set("Accept-Encoding", "gzip")
 	}
@@ -165,8 +153,7 @@ func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout ti
 }
 
 // marks records when each phase of one request began. The transport calls
-// the hooks from several goroutines and may keep calling them after the
-// request has returned, hence the lock and the done flag.
+// the hooks from several goroutines, even after the request has returned.
 type marks struct {
 	mu   sync.Mutex
 	done bool
@@ -186,8 +173,7 @@ func (m *marks) trace() *httptrace.ClientTrace {
 		}
 	}
 
-	// Once the request has its connection, any dial still running is for a
-	// connection it will not use.
+	// A dial still running once the request has a connection is not its own.
 	dial := func(at *time.Time) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -198,9 +184,8 @@ func (m *marks) trace() *httptrace.ClientTrace {
 	}
 
 	return &httptrace.ClientTrace{
-		// The transport asks for a connection again when it retries, which
-		// it does after finding that a reused one had gone stale. The
-		// phases start over and the failed attempt is left in Blocked.
+		// A retry asks for a connection again. The phases start over and
+		// the failed attempt is left in Blocked.
 		GetConn: func(string) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
@@ -234,9 +219,8 @@ func (m *marks) finish() (record.Timings, record.Conn) {
 	return m.timings(time.Now()), m.conn
 }
 
-// timings turns the marks into phases. Every moment from start to end
-// belongs to the phase that began most recently, so the phases cover the
-// request exactly and a failure lands in the phase it interrupted.
+// timings turns the marks into phases. Each moment belongs to the phase
+// that began most recently, so a failure lands in the one it interrupted.
 func (m *marks) timings(end time.Time) record.Timings {
 	var t record.Timings
 	steps := []struct {
@@ -251,8 +235,7 @@ func (m *marks) timings(end time.Time) record.Timings {
 		{m.firstByte, &t.Receive},
 	}
 	if m.conn.Reused {
-		// The transport dials while it waits for an idle connection. This
-		// request got the idle one, so the time it waited was all Blocked.
+		// Time spent dialling before an idle connection turned up is Blocked.
 		steps = steps[3:]
 	}
 
