@@ -3,10 +3,12 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"sync"
 	"time"
 
@@ -151,6 +153,11 @@ func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout ti
 		resp.Body.Close()
 	}
 	if err != nil {
+		// The entry already has the method and URL the client adds.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		e.Error = err.Error()
 	}
 	e.Timings, e.Conn = m.finish()

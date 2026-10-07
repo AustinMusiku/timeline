@@ -241,6 +241,8 @@ func TestFailedRequestDoesNotStopTheRun(t *testing.T) {
 	}
 	if e := got.Entries[0]; e.Error == "" || e.Response != nil {
 		t.Errorf("refused request: error %q, response %v; want an error and no response", e.Error, e.Response)
+	} else if strings.Contains(e.Error, refused) {
+		t.Errorf("error %q repeats the URL", e.Error)
 	}
 	if e := got.Entries[1]; e.Error != "" {
 		t.Errorf("request after the failure: %s", e.Error)
