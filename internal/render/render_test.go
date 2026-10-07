@@ -2,6 +2,7 @@ package render
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -126,6 +127,47 @@ func TestWaterfallColor(t *testing.T) {
 		}
 		if string(got[:chartAt]) != string(want[:chartAt]) {
 			t.Errorf("line %d differs before the chart:\n got %q\nwant %q", i+1, string(got[:chartAt]), string(want[:chartAt]))
+		}
+	}
+}
+
+func TestOverlappingRowsAreSpacedApart(t *testing.T) {
+	req := record.Request{Method: "GET", URL: "https://example.com"}
+	ok := &record.Response{Status: 200}
+	overlapping := &record.Run{Entries: []record.Entry{
+		{Seq: 0, Request: req, Response: ok, Timings: record.Timings{Wait: 100 * ms}},
+		{Seq: 1, Request: req, Response: ok, Timings: record.Timings{Wait: 80 * ms}},
+		{Seq: 0, Round: 1, Offset: 100 * ms, Request: req, Response: ok, Timings: record.Timings{Wait: 50 * ms}},
+	}}
+
+	// rows returns how many blank lines come before each row.
+	rows := func(out string) (gaps []int) {
+		blank := 0
+		for _, line := range strings.Split(out, "\n")[2:] {
+			switch {
+			case line == "":
+				blank++
+			case line[0] == ' ' && line[1] >= '1' && line[1] <= '9':
+				gaps = append(gaps, blank)
+				blank = 0
+			}
+		}
+		return gaps
+	}
+
+	tests := []struct {
+		name string
+		run  *record.Run
+		opts Options
+		want string
+	}{
+		{"overlapping bars in colour", overlapping, Options{Color: true}, "[0 1 2]"},
+		{"overlapping bars as letters", overlapping, Options{}, "[0 0 1]"},
+		{"bars one after another in colour", sample(), Options{Color: true}, "[0 0 0 1 0 0]"},
+	}
+	for _, tc := range tests {
+		if got := fmt.Sprint(rows(draw(t, tc.run, tc.opts))); got != tc.want {
+			t.Errorf("%s: blank lines before each row are %s, want %s", tc.name, got, tc.want)
 		}
 	}
 }

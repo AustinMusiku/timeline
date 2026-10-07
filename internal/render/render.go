@@ -96,7 +96,20 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	ticks, ruler := axis(span, cols)
 	fmt.Fprintf(&b, "%s%s\n%s%s\n", indent, in.paint(gray, ticks), indent, in.paint(gray, ruler))
 
+	// Coloured bars that overlap in time would run together, so space the
+	// rows out.
+	spaced := false
+	for i := 1; opts.Color && i < len(run.Entries); i++ {
+		prev, e := run.Entries[i-1], run.Entries[i]
+		if e.Round == prev.Round && e.Offset < prev.Offset+prev.Timings.Total() {
+			spaced = true
+		}
+	}
+
 	for i, e := range run.Entries {
+		if i > 0 && spaced {
+			b.WriteByte('\n')
+		}
 		if i > 0 && e.Round != run.Entries[i-1].Round {
 			b.WriteByte('\n')
 		}
