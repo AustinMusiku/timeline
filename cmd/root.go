@@ -36,6 +36,8 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: timeline/config.yaml in the user config dir)")
+	rootCmd.PersistentFlags().String("color", "auto", "when to use colour: auto, always or never")
+	viper.BindPFlag("color", rootCmd.PersistentFlags().Lookup("color"))
 }
 
 // Settings are resolved in this order: flag, TIMELINE_* environment

@@ -1,0 +1,13 @@
+                                                  0            500ms        1s
+                                                  ┬────────────┬────────────┬───
+ 1  200  https://api.exa…e.com/v1/users    650ms  dcccctttttttwwwwwr
+ 2  201  POST https://ap…om/v1/sessions    150ms                   wwwwr
+ 3  ERR  https://cdn.example.net/app.js     30ms                       dd
+         dial tcp: lookup cdn.example.net: no such host
+
+ 1  200  https://api.exa…e.com/v1/users    170ms                        wwwww
+ 2  500  POST https://ap…om/v1/sessions    100ms                            wwww
+ 3  ERR  https://cdn.example.net/app.js     20ms                               d
+         dial tcp: lookup cdn.example.net: no such host
+
+ - blocked  d dns  c connect  t tls  s send  w wait  r receive
