@@ -1,0 +1,40 @@
+[changelog]
+header = """
+# Changelog
+
+Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
+"""
+body = """
+
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% if previous.version %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits %}\
+- {% if commit.breaking %}**Breaking:** {% endif %}{{ commit.message | upper_first }}
+{% endfor %}\
+{% endfor %}\
+{% else %}
+Initial release.
+{% endif %}\
+"""
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+protect_breaking_commits = true
+tag_pattern = "v[0-9]*"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^\\w+(\\(.+\\))?!:", group = "<!-- 2 -->Other" },
+  { message = ".*", skip = true },
+]
+
+# Before 1.0 a breaking change bumps the minor version, not the major.
+[bump]
+initial_tag = "v0.1.0"
+features_always_bump_minor = true
+breaking_always_bump_major = false
