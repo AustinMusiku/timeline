@@ -11,15 +11,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Set at build time with -ldflags "-X github.com/AustinMusiku/timeline/cmd.version=...".
-var version = "dev"
-
 var cfgFile string
 
 var rootCmd = &cobra.Command{
 	Use:           "timeline",
 	Short:         "A network waterfall for the terminal",
-	Version:       version,
+	Version:       buildVersion(),
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
