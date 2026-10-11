@@ -1,0 +1,33 @@
+version: 2
+
+project_name: timeline
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/AustinMusiku/timeline/cmd.version={{ .Version }}
+      - -X github.com/AustinMusiku/timeline/cmd.commit={{ .FullCommit }}
+      - -X github.com/AustinMusiku/timeline/cmd.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+# Release notes come from CHANGELOG.md, passed in with --release-notes.
+release:
+  prerelease: auto
