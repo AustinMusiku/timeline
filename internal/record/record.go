@@ -80,4 +80,10 @@ type Conn struct {
 	// request opened. DNS, Connect and TLS are zero in these cases.
 	Reused     bool
 	RemoteAddr string // ip:port of the server, empty if no connection was made
+
+	TLSVersion string // "TLS 1.3", empty on a plain connection
+	// TLSResumed means the handshake that opened the connection resumed an
+	// earlier session.
+	TLSResumed bool
+	ALPN       string // "h2", "http/1.1", empty if none was negotiated
 }

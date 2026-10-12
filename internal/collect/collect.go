@@ -3,6 +3,7 @@ package collect
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +59,14 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 
 	// Keep bodies as sent, so sizes and Content-Encoding are the real ones.
 	tr.DisableCompression = true
+
+	// Let a host that is dialled again resume its TLS session.
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	if tr.TLSClientConfig.ClientSessionCache == nil {
+		tr.TLSClientConfig.ClientSessionCache = tls.NewLRUClientSessionCache(0)
+	}
 
 	// Keep every connection of a round open for the next one.
 	tr.MaxIdleConnsPerHost = max(concurrency, http.DefaultMaxIdleConnsPerHost)
@@ -240,6 +249,12 @@ func (m *marks) trace() *httptrace.ClientTrace {
 					ID:         m.seen.id(info.Conn),
 					Reused:     info.Reused,
 					RemoteAddr: info.Conn.RemoteAddr().String(),
+				}
+				if tc, ok := info.Conn.(*tls.Conn); ok {
+					state := tc.ConnectionState()
+					m.conn.TLSVersion = tls.VersionName(state.Version)
+					m.conn.TLSResumed = state.DidResume
+					m.conn.ALPN = state.NegotiatedProtocol
 				}
 			}
 		},

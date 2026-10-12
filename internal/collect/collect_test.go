@@ -132,13 +132,16 @@ func TestRetryStartsThePhasesOver(t *testing.T) {
 
 func TestColdThenWarm(t *testing.T) {
 	tests := []struct {
-		name    string
-		tls, h2 bool
-		proto   string
+		name       string
+		tls, h2    bool
+		proto      string
+		tlsVersion string
+		alpn       string
 	}{
 		{name: "http", proto: "HTTP/1.1"},
-		{name: "https", tls: true, proto: "HTTP/1.1"},
-		{name: "h2", tls: true, h2: true, proto: "HTTP/2.0"},
+		// The test client offers no protocols unless it is set up for h2.
+		{name: "https", tls: true, proto: "HTTP/1.1", tlsVersion: "TLS 1.3"},
+		{name: "h2", tls: true, h2: true, proto: "HTTP/2.0", tlsVersion: "TLS 1.3", alpn: "h2"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +177,9 @@ func TestColdThenWarm(t *testing.T) {
 				}
 				if e.Conn.ID != 1 {
 					t.Errorf("entry %d: connection id %d, want 1", i, e.Conn.ID)
+				}
+				if c := e.Conn; c.TLSVersion != tc.tlsVersion || c.ALPN != tc.alpn || c.TLSResumed {
+					t.Errorf("entry %d: tls %q, alpn %q, resumed %v; want %q, %q and a full handshake", i, c.TLSVersion, c.ALPN, c.TLSResumed, tc.tlsVersion, tc.alpn)
 				}
 			}
 
@@ -242,6 +248,32 @@ func TestConnectionsAreNumbered(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRedialResumesTheTLSSession(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Connection", "close")
+		hello(w, r)
+	}))
+	defer srv.Close()
+
+	got, err := run(t.Context(), transport(srv), []Request{{URL: srv.URL}}, Options{Repeat: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := got.Entries[0], got.Entries[1]
+	if first.Error != "" || second.Error != "" {
+		t.Fatalf("requests failed: %q, %q", first.Error, second.Error)
+	}
+	if first.Conn.TLSResumed {
+		t.Error("the first handshake of the run resumed a session")
+	}
+	if c := second.Conn; c.Reused || c.ID != 2 || !c.TLSResumed {
+		t.Errorf("second request: reused=%v id=%d resumed=%v, want a new connection 2 that resumed", c.Reused, c.ID, c.TLSResumed)
+	}
+	if second.Timings.TLS <= 0 {
+		t.Errorf("second request: tls=%v, want a handshake", second.Timings.TLS)
 	}
 }
 
