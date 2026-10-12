@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -62,7 +63,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	}
 	repeat := max(viper.GetInt("repeat"), 1)
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	opts := collect.Options{
