@@ -196,9 +196,10 @@ func (c *conns) id(conn net.Conn) int {
 // marks records when each phase of one request began. The transport calls
 // the hooks from several goroutines, even after the request has returned.
 type marks struct {
-	mu   sync.Mutex
-	done bool
-	seen *conns
+	mu       sync.Mutex
+	done     bool
+	seen     *conns
+	attempts int
 
 	start                                        time.Time
 	dns, connect, tls, gotConn, wrote, firstByte time.Time
@@ -240,6 +241,7 @@ func (m *marks) trace() *httptrace.ClientTrace {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if !m.done {
+				m.attempts++
 				m.dns, m.connect, m.tls = time.Time{}, time.Time{}, time.Time{}
 				m.gotConn, m.wrote, m.firstByte = time.Time{}, time.Time{}, time.Time{}
 				m.conn, m.dial = record.Conn{}, record.Dial{}
@@ -254,7 +256,14 @@ func (m *marks) trace() *httptrace.ClientTrace {
 				}
 			})
 		},
-		ConnectStart:      func(_, _ string) { dial(&m.connect) },
+		ConnectStart: func(_, _ string) {
+			dialling(func() {
+				m.dial.Connects++
+				if m.connect.IsZero() {
+					m.connect = time.Now()
+				}
+			})
+		},
 		TLSHandshakeStart: func() { dial(&m.tls) },
 		GotConn: func(info httptrace.GotConnInfo) {
 			m.mu.Lock()
@@ -265,6 +274,7 @@ func (m *marks) trace() *httptrace.ClientTrace {
 					ID:         m.seen.id(info.Conn),
 					Reused:     info.Reused,
 					RemoteAddr: info.Conn.RemoteAddr().String(),
+					LocalAddr:  info.Conn.LocalAddr().String(),
 				}
 				if tc, ok := info.Conn.(*tls.Conn); ok {
 					state := tc.ConnectionState()
@@ -284,7 +294,7 @@ func (m *marks) finish(e *record.Entry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.done = true
-	e.Timings, e.Conn = m.timings(time.Now()), m.conn
+	e.Timings, e.Conn, e.Attempts = m.timings(time.Now()), m.conn, m.attempts
 	// As in timings, a dial dropped for an idle connection does not count.
 	if !m.conn.Reused {
 		e.Dial = m.dial

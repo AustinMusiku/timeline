@@ -120,6 +120,9 @@ func TestRetryStartsThePhasesOver(t *testing.T) {
 	if e.Conn.Reused {
 		t.Error("request is marked reused, but the retry dialled")
 	}
+	if e.Attempts != 2 || e.Dial.Connects != 1 {
+		t.Errorf("got %d attempts and %d connects, want 2 and 1", e.Attempts, e.Dial.Connects)
+	}
 	if m.connect.IsZero() {
 		t.Error("the retry's connect was not recorded")
 	}
@@ -180,6 +183,12 @@ func TestColdThenWarm(t *testing.T) {
 				}
 				if e.Conn.ID != 1 {
 					t.Errorf("entry %d: connection id %d, want 1", i, e.Conn.ID)
+				}
+				if want := srv.Listener.Addr().String(); e.Conn.LocalAddr == "" || e.Conn.LocalAddr == want {
+					t.Errorf("entry %d: local address %q, want this end of the connection to %s", i, e.Conn.LocalAddr, want)
+				}
+				if e.Attempts != 1 || e.Dial.Connects != 1-i {
+					t.Errorf("entry %d: %d attempts and %d connects, want 1 and %d", i, e.Attempts, e.Dial.Connects, 1-i)
 				}
 				if len(e.Dial.Resolved) != 0 {
 					t.Errorf("entry %d: resolved %v, but the URL has an IP address", i, e.Dial.Resolved)

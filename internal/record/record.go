@@ -32,6 +32,9 @@ type Entry struct {
 	Timings  Timings
 	Conn     Conn
 	Dial     Dial
+	// Attempts is how many times the request asked for a connection. More
+	// than one means it was retried, and the earlier tries are in Blocked.
+	Attempts int
 
 	// Error is empty on success. A failed entry keeps the timings of the
 	// phases it got through.
@@ -81,6 +84,7 @@ type Conn struct {
 	// request opened. DNS, Connect and TLS are zero in these cases.
 	Reused     bool
 	RemoteAddr string // ip:port of the server, empty if no connection was made
+	LocalAddr  string // ip:port on this machine
 
 	TLSVersion string // "TLS 1.3", empty on a plain connection
 	// TLSResumed means the handshake that opened the connection resumed an
@@ -93,4 +97,5 @@ type Conn struct {
 // It is zero for a warm request.
 type Dial struct {
 	Resolved []string // IPs the lookup returned, empty if there was none
+	Connects int      // addresses a connect was started to
 }
