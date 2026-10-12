@@ -316,6 +316,35 @@ func TestConcurrentRequestsOverlap(t *testing.T) {
 	}
 }
 
+func TestOnEntrySeesEachEntryAsItFinishes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			time.Sleep(100 * time.Millisecond)
+		}
+		hello(w, r)
+	}))
+	defer srv.Close()
+
+	var seen []record.Entry
+	opts := Options{Repeat: 2, Concurrency: 2, OnEntry: func(e record.Entry) { seen = append(seen, e) }}
+	got, err := run(t.Context(), transport(srv), []Request{{URL: srv.URL + "/slow"}, {URL: srv.URL}}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != len(got.Entries) {
+		t.Fatalf("saw %d entries, want %d", len(seen), len(got.Entries))
+	}
+	// The slow request is sent first and finishes last, in both rounds.
+	for i, e := range seen {
+		if e.Error != "" {
+			t.Fatalf("request failed: %s", e.Error)
+		}
+		if e.Seq != 1-i%2 || e.Round != i/2 {
+			t.Errorf("entry %d is seq %d of round %d, want seq %d of round %d", i, e.Seq, e.Round, 1-i%2, i/2)
+		}
+	}
+}
+
 func TestCancelReturnsWhatWasCollected(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

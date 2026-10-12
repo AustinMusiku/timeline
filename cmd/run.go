@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/AustinMusiku/timeline/internal/collect"
+	"github.com/AustinMusiku/timeline/internal/record"
 	"github.com/AustinMusiku/timeline/internal/render"
 )
 
@@ -22,10 +24,17 @@ var runCmd = &cobra.Command{
 time axis, with each bar split into the phases the request went through.
 
 Connections stay open for the length of the run, so repeating the sequence
-with --repeat shows a cold first round followed by warm ones.`,
+with --repeat shows a cold first round followed by warm ones.
+
+With --json, stdout carries one line of JSON per request in place of the
+drawing, written as each request completes. Lines come in completion order,
+and seq, round and offset_ms recover the sequence. Times are milliseconds. A
+request that got no response has status 0 and an error. A 4xx or 5xx is a
+response, so its error is empty.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
-  timeline run --concurrency 4 https://example.com/a https://example.com/b`,
+  timeline run --concurrency 4 https://example.com/a https://example.com/b
+  timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,
 }
@@ -37,6 +46,7 @@ func init() {
 	f.IntP("repeat", "n", 1, "times to run the whole sequence")
 	f.IntP("concurrency", "c", 1, "requests to keep in flight at once")
 	f.Duration("timeout", 30*time.Second, "time limit for each request, 0 for none")
+	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	viper.BindPFlags(f)
 }
 
@@ -53,21 +63,37 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	}
 	repeat := max(viper.GetInt("repeat"), 1)
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	run, runErr := collect.Run(ctx, reqs, collect.Options{
+	opts := collect.Options{
 		Repeat:      repeat,
 		Concurrency: viper.GetInt("concurrency"),
 		Timeout:     viper.GetDuration("timeout"),
-	})
+	}
+	asJSON := viper.GetBool("json")
+	var writeErr error
+	if asJSON {
+		opts.OnEntry = func(e record.Entry) {
+			if err := render.JSON(out, e); err != nil && writeErr == nil {
+				writeErr = err
+			}
+		}
+	}
+
+	run, runErr := collect.Run(ctx, reqs, opts)
 	if run == nil {
 		return runErr
 	}
 
-	// An interrupted run still draws what it collected.
-	if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
-		return err
+	if writeErr != nil {
+		return writeErr
+	}
+	if !asJSON {
+		// An interrupted run still draws what it collected.
+		if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
+			return err
+		}
 	}
 	if runErr != nil {
 		return fmt.Errorf("interrupted after %d of %d requests", len(run.Entries), repeat*len(reqs))
