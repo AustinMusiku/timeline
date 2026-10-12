@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,74 @@ func TestRunReportsFailedRequests(t *testing.T) {
 	}
 	if !strings.Contains(out, " ERR  ") {
 		t.Errorf("the failed request was not drawn\n%s", out)
+	}
+}
+
+// lines decodes NDJSON output, failing on anything that is not an object.
+func lines(t *testing.T, out string) []map[string]any {
+	t.Helper()
+	var got []map[string]any
+	for l := range strings.Lines(out) {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(l), &m); err != nil {
+			t.Fatalf("line %q is not a JSON object: %v", l, err)
+		}
+		got = append(got, m)
+	}
+	return got
+}
+
+func TestRunJSONWritesOneLinePerRequest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "--repeat", "2", srv.URL, srv.URL+"/missing")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	got := lines(t, out)
+	if len(got) != 4 {
+		t.Fatalf("wrote %d lines, want 4\n%s", len(got), out)
+	}
+	for i, l := range got {
+		if len(l) != len(got[0]) {
+			t.Errorf("line %d has %d keys, the first has %d\n%s", i, len(l), len(got[0]), out)
+		}
+		// Sequential requests complete in the order they were sent.
+		if l["seq"] != float64(i%2) || l["round"] != float64(i/2) {
+			t.Errorf("line %d is seq %v of round %v", i, l["seq"], l["round"])
+		}
+		if want := float64(200 + 204*(i%2)); l["status"] != want || l["error"] != "" {
+			t.Errorf("line %d has status %v and error %q, want %v and no error", i, l["status"], l["error"], want)
+		}
+	}
+	if got[0]["reused"] != false || got[2]["reused"] != true {
+		t.Errorf("reused is %v then %v for the same URL, want false then true", got[0]["reused"], got[2]["reused"])
+	}
+}
+
+func TestRunJSONKeepsFailedRequests(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := "http://" + ln.Addr().String()
+	ln.Close()
+
+	out, err := execute(t, "run", "--json", refused)
+	if err == nil || err.Error() != "1 of 1 requests failed" {
+		t.Errorf("error %v, want 1 of 1 requests failed", err)
+	}
+	got := lines(t, out)
+	if len(got) != 1 {
+		t.Fatalf("wrote %d lines, want 1\n%s", len(got), out)
+	}
+	if l := got[0]; l["status"] != float64(0) || l["error"] == "" || l["proto"] != "" {
+		t.Errorf("status %v, proto %q, error %q; want 0, empty and an error", l["status"], l["proto"], l["error"])
 	}
 }
 
