@@ -97,7 +97,7 @@ func TestRetryStartsThePhasesOver(t *testing.T) {
 	conn, _ := net.Pipe()
 	defer conn.Close()
 
-	m := &marks{start: time.Now()}
+	m := &marks{start: time.Now(), seen: &conns{}}
 	tr := m.trace()
 
 	// A reused connection that turns out to be stale.
@@ -172,6 +172,9 @@ func TestColdThenWarm(t *testing.T) {
 				if e.Seq != 0 || e.Round != i {
 					t.Errorf("entry %d: seq %d round %d, want seq 0 round %d", i, e.Seq, e.Round, i)
 				}
+				if e.Conn.ID != 1 {
+					t.Errorf("entry %d: connection id %d, want 1", i, e.Conn.ID)
+				}
 			}
 
 			cold, warm := got.Entries[0], got.Entries[1]
@@ -186,6 +189,57 @@ func TestColdThenWarm(t *testing.T) {
 			}
 			if warm.Offset < cold.Offset+cold.Timings.Total() {
 				t.Errorf("warm request started at %v, before the cold one ended at %v", warm.Offset, cold.Offset+cold.Timings.Total())
+			}
+		})
+	}
+}
+
+func TestConnectionsAreNumbered(t *testing.T) {
+	tests := []struct {
+		name string
+		h2   bool
+		want int // connections the warm round needs
+	}{
+		{name: "http/1.1 takes one request at a time", want: 3},
+		{name: "h2 shares one connection", h2: true, want: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				time.Sleep(50 * time.Millisecond)
+				hello(w, r)
+			}))
+			srv.EnableHTTP2 = tc.h2
+			srv.StartTLS()
+			defer srv.Close()
+
+			u := Request{URL: srv.URL}
+			got, err := run(t.Context(), transport(srv), []Request{u, u, u}, Options{Repeat: 2, Concurrency: 3})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cold, warm := map[int]bool{}, map[int]bool{}
+			for i, e := range got.Entries {
+				if e.Error != "" {
+					t.Fatalf("entry %d failed: %s", i, e.Error)
+				}
+				if e.Conn.ID < 1 {
+					t.Errorf("entry %d: connection id %d, want 1 or more", i, e.Conn.ID)
+				}
+				if e.Round == 0 {
+					cold[e.Conn.ID] = true
+				} else {
+					warm[e.Conn.ID] = true
+				}
+			}
+			if len(warm) != tc.want {
+				t.Errorf("warm round used %d connections, want %d", len(warm), tc.want)
+			}
+			for id := range warm {
+				if !cold[id] {
+					t.Errorf("warm round used connection %d, which the cold round did not", id)
+				}
 			}
 		})
 	}
@@ -239,8 +293,8 @@ func TestFailedRequestDoesNotStopTheRun(t *testing.T) {
 	if len(got.Entries) != 2 {
 		t.Fatalf("got %d entries, want 2", len(got.Entries))
 	}
-	if e := got.Entries[0]; e.Error == "" || e.Response != nil {
-		t.Errorf("refused request: error %q, response %v; want an error and no response", e.Error, e.Response)
+	if e := got.Entries[0]; e.Error == "" || e.Response != nil || e.Conn.ID != 0 {
+		t.Errorf("refused request: error %q, response %v, connection %d; want an error, no response and no connection", e.Error, e.Response, e.Conn.ID)
 	} else if strings.Contains(e.Error, refused) {
 		t.Errorf("error %q repeats the URL", e.Error)
 	}

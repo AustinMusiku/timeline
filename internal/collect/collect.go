@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -71,6 +72,7 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 
 	started := time.Now()
 	entries := make([]record.Entry, repeat*len(tmpls))
+	var seen conns
 	sent := 0
 
 	var wg sync.WaitGroup
@@ -90,7 +92,7 @@ send:
 
 			wg.Go(func() {
 				defer func() { <-slots }()
-				*e = do(ctx, client, tmpl, opts.Timeout, started)
+				*e = do(ctx, client, &seen, tmpl, opts.Timeout, started)
 				e.Seq, e.Round = seq, round
 				if opts.OnEntry != nil {
 					emit.Lock()
@@ -126,14 +128,14 @@ func newRequest(r Request) (*http.Request, error) {
 }
 
 // do sends one request and reads its body to the end.
-func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout time.Duration, origin time.Time) record.Entry {
+func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time) record.Entry {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
-	var m marks
+	m := marks{seen: seen}
 	req := tmpl.Clone(httptrace.WithClientTrace(ctx, m.trace()))
 
 	m.start = time.Now()
@@ -161,11 +163,33 @@ func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout ti
 	return e
 }
 
+// conns numbers the connections of a run in the order they are first used.
+type conns struct {
+	mu  sync.Mutex
+	ids map[net.Conn]int
+}
+
+func (c *conns) id(conn net.Conn) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	id, ok := c.ids[conn]
+	if !ok {
+		if c.ids == nil {
+			c.ids = make(map[net.Conn]int)
+		}
+		id = len(c.ids) + 1
+		c.ids[conn] = id
+	}
+	return id
+}
+
 // marks records when each phase of one request began. The transport calls
 // the hooks from several goroutines, even after the request has returned.
 type marks struct {
 	mu   sync.Mutex
 	done bool
+	seen *conns
 
 	start                                        time.Time
 	dns, connect, tls, gotConn, wrote, firstByte time.Time
@@ -212,7 +236,11 @@ func (m *marks) trace() *httptrace.ClientTrace {
 			defer m.mu.Unlock()
 			if !m.done && m.gotConn.IsZero() {
 				m.gotConn = time.Now()
-				m.conn = record.Conn{Reused: info.Reused, RemoteAddr: info.Conn.RemoteAddr().String()}
+				m.conn = record.Conn{
+					ID:         m.seen.id(info.Conn),
+					Reused:     info.Reused,
+					RemoteAddr: info.Conn.RemoteAddr().String(),
+				}
 			}
 		},
 		WroteRequest:         func(httptrace.WroteRequestInfo) { mark(&m.wrote) },

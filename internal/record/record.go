@@ -73,6 +73,9 @@ func (t Timings) Total() time.Duration {
 
 // Conn describes the connection a request went out on.
 type Conn struct {
+	// ID numbers the connections of a run from 1, in the order they were
+	// first used. Zero means no connection was made.
+	ID int
 	// Reused marks a warm request, one sent on a connection that an earlier
 	// request opened. DNS, Connect and TLS are zero in these cases.
 	Reused     bool
