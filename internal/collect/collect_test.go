@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,7 +115,9 @@ func TestRetryStartsThePhasesOver(t *testing.T) {
 	tr.GotConn(httptrace.GotConnInfo{Conn: conn})
 	tr.TLSHandshakeStart() // a dial that lost the race
 
-	if _, c := m.finish(); c.Reused {
+	var e record.Entry
+	m.finish(&e)
+	if e.Conn.Reused {
 		t.Error("request is marked reused, but the retry dialled")
 	}
 	if m.connect.IsZero() {
@@ -177,6 +180,9 @@ func TestColdThenWarm(t *testing.T) {
 				}
 				if e.Conn.ID != 1 {
 					t.Errorf("entry %d: connection id %d, want 1", i, e.Conn.ID)
+				}
+				if len(e.Dial.Resolved) != 0 {
+					t.Errorf("entry %d: resolved %v, but the URL has an IP address", i, e.Dial.Resolved)
 				}
 				if c := e.Conn; c.TLSVersion != tc.tlsVersion || c.ALPN != tc.alpn || c.TLSResumed {
 					t.Errorf("entry %d: tls %q, alpn %q, resumed %v; want %q, %q and a full handshake", i, c.TLSVersion, c.ALPN, c.TLSResumed, tc.tlsVersion, tc.alpn)
@@ -248,6 +254,27 @@ func TestConnectionsAreNumbered(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLookupBelongsToTheRequestThatMadeIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(hello))
+	defer srv.Close()
+	ip, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+
+	got, err := run(t.Context(), transport(srv), []Request{{URL: "http://localhost:" + port}}, Options{Repeat: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cold, warm := got.Entries[0], got.Entries[1]
+	if cold.Error != "" || warm.Error != "" {
+		t.Fatalf("requests failed: %q, %q", cold.Error, warm.Error)
+	}
+	if !slices.Contains(cold.Dial.Resolved, ip) {
+		t.Errorf("cold request resolved %v, want it to include %s", cold.Dial.Resolved, ip)
+	}
+	if len(warm.Dial.Resolved) != 0 {
+		t.Errorf("warm request resolved %v, but made no lookup", warm.Dial.Resolved)
 	}
 }
 

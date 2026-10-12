@@ -31,6 +31,7 @@ type Entry struct {
 	Response *Response // nil when the request failed before a response arrived
 	Timings  Timings
 	Conn     Conn
+	Dial     Dial
 
 	// Error is empty on success. A failed entry keeps the timings of the
 	// phases it got through.
@@ -86,4 +87,10 @@ type Conn struct {
 	// earlier session.
 	TLSResumed bool
 	ALPN       string // "h2", "http/1.1", empty if none was negotiated
+}
+
+// Dial is the lookup and connects a request made to open its connection.
+// It is zero for a warm request.
+type Dial struct {
+	Resolved []string // IPs the lookup returned, empty if there was none
 }

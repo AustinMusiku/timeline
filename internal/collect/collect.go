@@ -168,7 +168,7 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 		}
 		e.Error = err.Error()
 	}
-	e.Timings, e.Conn = m.finish()
+	m.finish(&e)
 	return e
 }
 
@@ -203,6 +203,7 @@ type marks struct {
 	start                                        time.Time
 	dns, connect, tls, gotConn, wrote, firstByte time.Time
 	conn                                         record.Conn
+	dial                                         record.Dial
 }
 
 func (m *marks) trace() *httptrace.ClientTrace {
@@ -216,13 +217,20 @@ func (m *marks) trace() *httptrace.ClientTrace {
 	}
 
 	// A dial still running once the request has a connection is not its own.
-	dial := func(at *time.Time) {
+	dialling := func(f func()) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		if !m.done && m.gotConn.IsZero() && at.IsZero() {
-			*at = time.Now()
+		if !m.done && m.gotConn.IsZero() {
+			f()
 		}
+	}
+	dial := func(at *time.Time) {
+		dialling(func() {
+			if at.IsZero() {
+				*at = time.Now()
+			}
+		})
 	}
 
 	return &httptrace.ClientTrace{
@@ -234,10 +242,18 @@ func (m *marks) trace() *httptrace.ClientTrace {
 			if !m.done {
 				m.dns, m.connect, m.tls = time.Time{}, time.Time{}, time.Time{}
 				m.gotConn, m.wrote, m.firstByte = time.Time{}, time.Time{}, time.Time{}
-				m.conn = record.Conn{}
+				m.conn, m.dial = record.Conn{}, record.Dial{}
 			}
 		},
-		DNSStart:          func(httptrace.DNSStartInfo) { dial(&m.dns) },
+		DNSStart: func(httptrace.DNSStartInfo) { dial(&m.dns) },
+		DNSDone: func(info httptrace.DNSDoneInfo) {
+			dialling(func() {
+				m.dial.Resolved = nil
+				for _, a := range info.Addrs {
+					m.dial.Resolved = append(m.dial.Resolved, a.String())
+				}
+			})
+		},
 		ConnectStart:      func(_, _ string) { dial(&m.connect) },
 		TLSHandshakeStart: func() { dial(&m.tls) },
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -263,12 +279,16 @@ func (m *marks) trace() *httptrace.ClientTrace {
 	}
 }
 
-// finish stops the hooks and returns what they saw.
-func (m *marks) finish() (record.Timings, record.Conn) {
+// finish stops the hooks and writes what they saw to e.
+func (m *marks) finish(e *record.Entry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.done = true
-	return m.timings(time.Now()), m.conn
+	e.Timings, e.Conn = m.timings(time.Now()), m.conn
+	// As in timings, a dial dropped for an idle connection does not count.
+	if !m.conn.Reused {
+		e.Dial = m.dial
+	}
 }
 
 // timings turns the marks into phases. Each moment belongs to the phase
