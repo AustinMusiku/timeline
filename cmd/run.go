@@ -24,13 +24,22 @@ var runCmd = &cobra.Command{
 time axis, with each bar split into the phases the request went through.
 
 Connections stay open for the length of the run, so repeating the sequence
-with --repeat shows a cold first round followed by warm ones.
+with --repeat shows a cold first round followed by warm ones. Each row is
+tagged with the connection it used, and the connections are listed under the
+chart, so rows with the same tag shared one.
 
 With --json, stdout carries one line of JSON per request in place of the
 drawing, written as each request completes. Lines come in completion order,
 and seq, round and offset_ms recover the sequence. Times are milliseconds. A
 request that got no response has status 0 and an error. A 4xx or 5xx is a
-response, so its error is empty.`,
+response, so its error is empty.
+
+conn_id numbers the connections of the run from 1, and is 0 for a request
+that never got one. reused means the connection was already open, and
+tls_resumed that the handshake which opened it resumed an earlier session.
+resolved_ips and dial_attempts describe the request's own dial, so they are
+empty and 0 on a reused connection. attempts above 1 means the request was
+retried.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
   timeline run --concurrency 4 https://example.com/a https://example.com/b
