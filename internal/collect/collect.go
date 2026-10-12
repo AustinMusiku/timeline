@@ -29,6 +29,9 @@ type Options struct {
 	Concurrency int
 	// Timeout bounds each request, body included. Zero means no limit.
 	Timeout time.Duration
+	// OnEntry, if set, is called with each entry as its request finishes,
+	// one call at a time.
+	OnEntry func(record.Entry)
 }
 
 // Run sends reqs in order, Repeat times over, and returns one entry per
@@ -71,6 +74,7 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 	sent := 0
 
 	var wg sync.WaitGroup
+	var emit sync.Mutex
 	slots := make(chan struct{}, concurrency)
 send:
 	for round := range repeat {
@@ -88,6 +92,11 @@ send:
 				defer func() { <-slots }()
 				*e = do(ctx, client, tmpl, opts.Timeout, started)
 				e.Seq, e.Round = seq, round
+				if opts.OnEntry != nil {
+					emit.Lock()
+					defer emit.Unlock()
+					opts.OnEntry(*e)
+				}
 			})
 		}
 		// Finish the round so the next one finds its connections idle.
