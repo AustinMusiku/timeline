@@ -4,6 +4,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -72,7 +73,7 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	}
 
 	var span time.Duration
-	seqW, labelW := 0, 0
+	seqW, labelW, connW := 0, 0, 0
 	labels := make([]string, len(run.Entries))
 	for i, e := range run.Entries {
 		span = max(span, e.Offset+e.Timings.Total())
@@ -82,11 +83,19 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 			labels[i] = e.Request.Method + " " + labels[i]
 		}
 		labelW = max(labelW, utf8.RuneCountInString(labels[i]))
+		if e.Conn.ID > 0 {
+			connW = max(connW, len(connTag(e.Conn.ID)))
+		}
 	}
 	span = max(span, 1)
 
-	// A row reads: seq, status, label, total, bar.
-	fixed := 1 + seqW + 2 + statusW + 2 + 2 + totalW + 2
+	// A row reads: seq, status, connection, label, total, bar. The
+	// connection is left out of a run that never made one.
+	lead := 1 + seqW + 2 + statusW + 2
+	if connW > 0 {
+		lead += connW + 2
+	}
+	fixed := lead + 2 + totalW + 2
 	labelW = max(min(labelW, (width-fixed)/2), minLabelW)
 	cols := max(width-fixed-labelW, minCols)
 	perCol := float64(span) / float64(cols)
@@ -128,11 +137,25 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 		if opts.Color {
 			bar = blocks(e, cols, perCol)
 		}
-		fmt.Fprintf(&b, " %*d  %s  %-*s  %*s  %s\n",
-			seqW, e.Seq+1, status, labelW, clip(labels[i], labelW),
+		conn := ""
+		if connW > 0 {
+			if e.Conn.ID > 0 {
+				conn = connTag(e.Conn.ID)
+			}
+			conn = in.paint(gray, conn) + strings.Repeat(" ", connW-len(conn)+2)
+		}
+		fmt.Fprintf(&b, " %*d  %s  %s%-*s  %*s  %s\n",
+			seqW, e.Seq+1, status, conn, labelW, clip(labels[i], labelW),
 			totalW, human(e.Timings.Total()), bar)
 		if e.Error != "" {
-			fmt.Fprintf(&b, "%*s%s\n", 1+seqW+2+statusW+2, "", e.Error)
+			fmt.Fprintf(&b, "%*s%s\n", lead, "", e.Error)
+		}
+	}
+
+	if connW > 0 {
+		b.WriteByte('\n')
+		for _, line := range connections(run, connW, in) {
+			fmt.Fprintf(&b, " %s\n", line)
 		}
 	}
 
@@ -148,6 +171,47 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+func connTag(id int) string { return "#" + strconv.Itoa(id) }
+
+// connections describes each connection of the run on a line of its own.
+func connections(run *record.Run, tagW int, in ink) []string {
+	conns, protos := map[int]record.Conn{}, map[int]string{}
+	addrW := 0
+	for _, e := range run.Entries {
+		id := e.Conn.ID
+		if id == 0 {
+			continue
+		}
+		if _, ok := conns[id]; !ok {
+			conns[id] = e.Conn
+			addrW = max(addrW, len(e.Conn.RemoteAddr))
+		}
+		if e.Response != nil && protos[id] == "" {
+			protos[id] = e.Response.Proto
+		}
+	}
+
+	lines := make([]string, 0, len(conns))
+	for _, id := range slices.Sorted(maps.Keys(conns)) {
+		c := conns[id]
+		tag := connTag(id)
+		parts := []string{
+			in.paint(gray, tag) + strings.Repeat(" ", tagW-len(tag)),
+			fmt.Sprintf("%-*s", addrW, c.RemoteAddr),
+		}
+		for _, s := range []string{protos[id], c.TLSVersion} {
+			if s != "" {
+				parts = append(parts, s)
+			}
+		}
+		if c.TLSResumed {
+			parts = append(parts, "resumed")
+		}
+		lines = append(lines, strings.TrimRight(strings.Join(parts, "  "), " "))
+	}
+	return lines
 }
 
 // ink writes colour, or leaves text alone when colour is off.

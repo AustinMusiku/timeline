@@ -31,6 +31,10 @@ type Entry struct {
 	Response *Response // nil when the request failed before a response arrived
 	Timings  Timings
 	Conn     Conn
+	Dial     Dial
+	// Attempts is how many times the request asked for a connection. More
+	// than one means it was retried, and the earlier tries are in Blocked.
+	Attempts int
 
 	// Error is empty on success. A failed entry keeps the timings of the
 	// phases it got through.
@@ -73,8 +77,25 @@ func (t Timings) Total() time.Duration {
 
 // Conn describes the connection a request went out on.
 type Conn struct {
+	// ID numbers the connections of a run from 1, in the order they were
+	// first used. Zero means no connection was made.
+	ID int
 	// Reused marks a warm request, one sent on a connection that an earlier
 	// request opened. DNS, Connect and TLS are zero in these cases.
 	Reused     bool
 	RemoteAddr string // ip:port of the server, empty if no connection was made
+	LocalAddr  string // ip:port on this machine
+
+	TLSVersion string // "TLS 1.3", empty on a plain connection
+	// TLSResumed means the handshake that opened the connection resumed an
+	// earlier session.
+	TLSResumed bool
+	ALPN       string // "h2", "http/1.1", empty if none was negotiated
+}
+
+// Dial is the lookup and connects a request made to open its connection.
+// It is zero for a warm request.
+type Dial struct {
+	Resolved []string // IPs the lookup returned, empty if there was none
+	Connects int      // addresses a connect was started to
 }

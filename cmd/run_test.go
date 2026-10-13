@@ -116,6 +116,9 @@ func TestRunJSONWritesOneLinePerRequest(t *testing.T) {
 	if got[0]["reused"] != false || got[2]["reused"] != true {
 		t.Errorf("reused is %v then %v for the same URL, want false then true", got[0]["reused"], got[2]["reused"])
 	}
+	if got[0]["conn_id"] != float64(1) || got[2]["conn_id"] != float64(1) {
+		t.Errorf("conn_id is %v then %v for the same URL, want 1 both times", got[0]["conn_id"], got[2]["conn_id"])
+	}
 }
 
 func TestRunJSONKeepsFailedRequests(t *testing.T) {
@@ -134,8 +137,8 @@ func TestRunJSONKeepsFailedRequests(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("wrote %d lines, want 1\n%s", len(got), out)
 	}
-	if l := got[0]; l["status"] != float64(0) || l["error"] == "" || l["proto"] != "" {
-		t.Errorf("status %v, proto %q, error %q; want 0, empty and an error", l["status"], l["proto"], l["error"])
+	if l := got[0]; l["status"] != float64(0) || l["error"] == "" || l["proto"] != "" || l["conn_id"] != float64(0) {
+		t.Errorf("status %v, proto %q, conn_id %v, error %q; want 0, empty, 0 and an error", l["status"], l["proto"], l["conn_id"], l["error"])
 	}
 }
 

@@ -3,9 +3,11 @@ package collect
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
@@ -58,6 +60,14 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 	// Keep bodies as sent, so sizes and Content-Encoding are the real ones.
 	tr.DisableCompression = true
 
+	// Let a host that is dialled again resume its TLS session.
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	if tr.TLSClientConfig.ClientSessionCache == nil {
+		tr.TLSClientConfig.ClientSessionCache = tls.NewLRUClientSessionCache(0)
+	}
+
 	// Keep every connection of a round open for the next one.
 	tr.MaxIdleConnsPerHost = max(concurrency, http.DefaultMaxIdleConnsPerHost)
 	defer tr.CloseIdleConnections()
@@ -71,6 +81,7 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 
 	started := time.Now()
 	entries := make([]record.Entry, repeat*len(tmpls))
+	var seen conns
 	sent := 0
 
 	var wg sync.WaitGroup
@@ -90,7 +101,7 @@ send:
 
 			wg.Go(func() {
 				defer func() { <-slots }()
-				*e = do(ctx, client, tmpl, opts.Timeout, started)
+				*e = do(ctx, client, &seen, tmpl, opts.Timeout, started)
 				e.Seq, e.Round = seq, round
 				if opts.OnEntry != nil {
 					emit.Lock()
@@ -126,14 +137,14 @@ func newRequest(r Request) (*http.Request, error) {
 }
 
 // do sends one request and reads its body to the end.
-func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout time.Duration, origin time.Time) record.Entry {
+func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time) record.Entry {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
-	var m marks
+	m := marks{seen: seen}
 	req := tmpl.Clone(httptrace.WithClientTrace(ctx, m.trace()))
 
 	m.start = time.Now()
@@ -157,19 +168,43 @@ func do(ctx context.Context, client *http.Client, tmpl *http.Request, timeout ti
 		}
 		e.Error = err.Error()
 	}
-	e.Timings, e.Conn = m.finish()
+	m.finish(&e)
 	return e
+}
+
+// conns numbers the connections of a run in the order they are first used.
+type conns struct {
+	mu  sync.Mutex
+	ids map[net.Conn]int
+}
+
+func (c *conns) id(conn net.Conn) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	id, ok := c.ids[conn]
+	if !ok {
+		if c.ids == nil {
+			c.ids = make(map[net.Conn]int)
+		}
+		id = len(c.ids) + 1
+		c.ids[conn] = id
+	}
+	return id
 }
 
 // marks records when each phase of one request began. The transport calls
 // the hooks from several goroutines, even after the request has returned.
 type marks struct {
-	mu   sync.Mutex
-	done bool
+	mu       sync.Mutex
+	done     bool
+	seen     *conns
+	attempts int
 
 	start                                        time.Time
 	dns, connect, tls, gotConn, wrote, firstByte time.Time
 	conn                                         record.Conn
+	dial                                         record.Dial
 }
 
 func (m *marks) trace() *httptrace.ClientTrace {
@@ -183,13 +218,20 @@ func (m *marks) trace() *httptrace.ClientTrace {
 	}
 
 	// A dial still running once the request has a connection is not its own.
-	dial := func(at *time.Time) {
+	dialling := func(f func()) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		if !m.done && m.gotConn.IsZero() && at.IsZero() {
-			*at = time.Now()
+		if !m.done && m.gotConn.IsZero() {
+			f()
 		}
+	}
+	dial := func(at *time.Time) {
+		dialling(func() {
+			if at.IsZero() {
+				*at = time.Now()
+			}
+		})
 	}
 
 	return &httptrace.ClientTrace{
@@ -199,20 +241,47 @@ func (m *marks) trace() *httptrace.ClientTrace {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if !m.done {
+				m.attempts++
 				m.dns, m.connect, m.tls = time.Time{}, time.Time{}, time.Time{}
 				m.gotConn, m.wrote, m.firstByte = time.Time{}, time.Time{}, time.Time{}
-				m.conn = record.Conn{}
+				m.conn, m.dial = record.Conn{}, record.Dial{}
 			}
 		},
-		DNSStart:          func(httptrace.DNSStartInfo) { dial(&m.dns) },
-		ConnectStart:      func(_, _ string) { dial(&m.connect) },
+		DNSStart: func(httptrace.DNSStartInfo) { dial(&m.dns) },
+		DNSDone: func(info httptrace.DNSDoneInfo) {
+			dialling(func() {
+				m.dial.Resolved = nil
+				for _, a := range info.Addrs {
+					m.dial.Resolved = append(m.dial.Resolved, a.String())
+				}
+			})
+		},
+		ConnectStart: func(_, _ string) {
+			dialling(func() {
+				m.dial.Connects++
+				if m.connect.IsZero() {
+					m.connect = time.Now()
+				}
+			})
+		},
 		TLSHandshakeStart: func() { dial(&m.tls) },
 		GotConn: func(info httptrace.GotConnInfo) {
 			m.mu.Lock()
 			defer m.mu.Unlock()
 			if !m.done && m.gotConn.IsZero() {
 				m.gotConn = time.Now()
-				m.conn = record.Conn{Reused: info.Reused, RemoteAddr: info.Conn.RemoteAddr().String()}
+				m.conn = record.Conn{
+					ID:         m.seen.id(info.Conn),
+					Reused:     info.Reused,
+					RemoteAddr: info.Conn.RemoteAddr().String(),
+					LocalAddr:  info.Conn.LocalAddr().String(),
+				}
+				if tc, ok := info.Conn.(*tls.Conn); ok {
+					state := tc.ConnectionState()
+					m.conn.TLSVersion = tls.VersionName(state.Version)
+					m.conn.TLSResumed = state.DidResume
+					m.conn.ALPN = state.NegotiatedProtocol
+				}
 			}
 		},
 		WroteRequest:         func(httptrace.WroteRequestInfo) { mark(&m.wrote) },
@@ -220,12 +289,16 @@ func (m *marks) trace() *httptrace.ClientTrace {
 	}
 }
 
-// finish stops the hooks and returns what they saw.
-func (m *marks) finish() (record.Timings, record.Conn) {
+// finish stops the hooks and writes what they saw to e.
+func (m *marks) finish(e *record.Entry) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.done = true
-	return m.timings(time.Now()), m.conn
+	e.Timings, e.Conn, e.Attempts = m.timings(time.Now()), m.conn, m.attempts
+	// As in timings, a dial dropped for an idle connection does not count.
+	if !m.conn.Reused {
+		e.Dial = m.dial
+	}
 }
 
 // timings turns the marks into phases. Each moment belongs to the phase

@@ -19,7 +19,10 @@ const ms = time.Millisecond
 
 // sample is two rounds of three requests, one of which fails.
 func sample() *record.Run {
-	ok := func(status int) *record.Response { return &record.Response{Status: status} }
+	ok := func(status int) *record.Response { return &record.Response{Status: status, Proto: "HTTP/2.0"} }
+	api := record.Conn{ID: 1, RemoteAddr: "93.184.216.34:443", TLSVersion: "TLS 1.3"}
+	warm := api
+	warm.Reused = true
 	const (
 		users    = "https://api.example.com/v1/users"
 		sessions = "https://api.example.com/v1/sessions"
@@ -32,13 +35,14 @@ func sample() *record.Run {
 			Request:  record.Request{Method: "GET", URL: users},
 			Response: ok(200),
 			Timings:  record.Timings{Blocked: 1 * ms, DNS: 24 * ms, Connect: 150 * ms, TLS: 275 * ms, Wait: 180 * ms, Receive: 20 * ms},
+			Conn:     api,
 		},
 		{
 			Seq: 1, Round: 0, Offset: 650 * ms,
 			Request:  record.Request{Method: "POST", URL: sessions},
 			Response: ok(201),
 			Timings:  record.Timings{Wait: 140 * ms, Receive: 10 * ms},
-			Conn:     record.Conn{Reused: true},
+			Conn:     warm,
 		},
 		{
 			Seq: 2, Round: 0, Offset: 800 * ms,
@@ -51,14 +55,14 @@ func sample() *record.Run {
 			Request:  record.Request{Method: "GET", URL: users},
 			Response: ok(200),
 			Timings:  record.Timings{Wait: 170 * ms},
-			Conn:     record.Conn{Reused: true},
+			Conn:     warm,
 		},
 		{
 			Seq: 1, Round: 1, Offset: 1000 * ms,
 			Request:  record.Request{Method: "POST", URL: sessions},
 			Response: ok(500),
 			Timings:  record.Timings{Wait: 100 * ms},
-			Conn:     record.Conn{Reused: true},
+			Conn:     warm,
 		},
 		{
 			Seq: 2, Round: 1, Offset: 1100 * ms,
@@ -115,7 +119,7 @@ func TestWaterfallColor(t *testing.T) {
 	}
 
 	// Colour changes how the bars are drawn and nothing to their left.
-	const chartAt = 50
+	const chartAt = 52
 	stripped := strings.Split(regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(colored, ""), "\n")
 	if len(stripped) != len(plain) {
 		t.Fatalf("coloured output has %d lines, plain has %d", len(stripped), len(plain))
@@ -128,6 +132,43 @@ func TestWaterfallColor(t *testing.T) {
 		if string(got[:chartAt]) != string(want[:chartAt]) {
 			t.Errorf("line %d differs before the chart:\n got %q\nwant %q", i+1, string(got[:chartAt]), string(want[:chartAt]))
 		}
+	}
+}
+
+func TestConnectionsAreListed(t *testing.T) {
+	req := record.Request{Method: "GET", URL: "https://example.com"}
+	entry := func(proto string, c record.Conn) record.Entry {
+		e := record.Entry{Request: req, Timings: record.Timings{Wait: 10 * ms}, Conn: c}
+		if proto != "" {
+			e.Response = &record.Response{Status: 200, Proto: proto}
+		}
+		return e
+	}
+	run := &record.Run{Entries: []record.Entry{
+		entry("HTTP/1.1", record.Conn{ID: 2, RemoteAddr: "93.184.216.34:443", TLSVersion: "TLS 1.3", TLSResumed: true}),
+		entry("", record.Conn{ID: 1, RemoteAddr: "[2606:2800:220:1::1]:443", TLSVersion: "TLS 1.2"}),
+		entry("HTTP/2.0", record.Conn{ID: 1, RemoteAddr: "[2606:2800:220:1::1]:443", TLSVersion: "TLS 1.2", Reused: true}),
+		entry("HTTP/1.1", record.Conn{ID: 10, RemoteAddr: "127.0.0.1:8080"}),
+		{Request: req, Error: "no such host"},
+	}}
+	got := draw(t, run, Options{Width: 80})
+
+	want := "\n" +
+		" #1   [2606:2800:220:1::1]:443  HTTP/2.0  TLS 1.2\n" +
+		" #2   93.184.216.34:443         HTTP/1.1  TLS 1.3  resumed\n" +
+		" #10  127.0.0.1:8080            HTTP/1.1\n" +
+		"\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("connections are not listed as\n%s\ngot:\n%s", want, got)
+	}
+	for _, row := range []string{" 1  200  #2   https", " 1  200  #10  https", " 1  ERR       https"} {
+		if !strings.Contains(got, row) {
+			t.Errorf("no row starts %q\n%s", row, got)
+		}
+	}
+
+	if got := draw(t, &record.Run{Entries: run.Entries[4:]}, Options{Width: 80}); strings.Contains(got, "#") {
+		t.Errorf("a run with no connections still shows them\n%s", got)
 	}
 }
 
