@@ -28,11 +28,19 @@ with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
 chart, so rows with the same tag shared one.
 
+Redirects are followed, up to --max-redirects from each request. Every hop is
+a request of its own, drawn on a row under the one that led to it. A redirect
+left unfollowed at the limit counts as a failed request.
+
 With --json, stdout carries one line of JSON per request in place of the
 drawing, written as each request completes. Lines come in completion order,
 and seq, round and offset_ms recover the sequence. Times are milliseconds. A
 request that got no response has status 0 and an error. A 4xx or 5xx is a
 response, so its error is empty.
+
+The hops of a redirect share a seq, and hop counts them from 0 for the URL
+that was given. location is the response's Location header, or null if it had
+none.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
@@ -55,6 +63,7 @@ func init() {
 	f.IntP("repeat", "n", 1, "times to run the whole sequence")
 	f.IntP("concurrency", "c", 1, "requests to keep in flight at once")
 	f.Duration("timeout", 30*time.Second, "time limit for each request, 0 for none")
+	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	viper.BindPFlags(f)
 }
@@ -76,9 +85,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	defer stop()
 
 	opts := collect.Options{
-		Repeat:      repeat,
-		Concurrency: viper.GetInt("concurrency"),
-		Timeout:     viper.GetDuration("timeout"),
+		Repeat:       repeat,
+		Concurrency:  viper.GetInt("concurrency"),
+		Timeout:      viper.GetDuration("timeout"),
+		MaxRedirects: viper.GetInt("max-redirects"),
 	}
 	asJSON := viper.GetBool("json")
 	var writeErr error
@@ -104,15 +114,18 @@ func runSequence(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	if runErr != nil {
-		return fmt.Errorf("interrupted after %d of %d requests", len(run.Entries), repeat*len(reqs))
-	}
-
-	failed := 0
+	// A redirect's hops belong to the request that led to them.
+	sent, failed := 0, 0
 	for _, e := range run.Entries {
+		if e.Hop == 0 {
+			sent++
+		}
 		if e.Error != "" {
 			failed++
 		}
+	}
+	if runErr != nil {
+		return fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))

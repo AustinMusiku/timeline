@@ -26,13 +26,14 @@ timeline run https://example.com https://example.com/about
 
 Each URL gets a GET, one after the other, in the order given.
 
-| Flag                  | Default | What it does                                    |
-| --------------------- | ------- | ----------------------------------------------- |
-| `-n`, `--repeat`      | `1`     | Times to run the whole sequence                 |
-| `-c`, `--concurrency` | `1`     | Requests to keep in flight at once              |
-| `--timeout`           | `30s`   | Time limit for each request, `0` for none       |
-| `--json`              | off     | One line of JSON per request instead of drawing |
-| `--color`             | `auto`  | `auto`, `always` or `never`                     |
+| Flag                  | Default | What it does                                        |
+| --------------------- | ------- | --------------------------------------------------- |
+| `-n`, `--repeat`      | `1`     | Times to run the whole sequence                     |
+| `-c`, `--concurrency` | `1`     | Requests to keep in flight at once                  |
+| `--timeout`           | `30s`   | Time limit for each request, `0` for none           |
+| `--max-redirects`     | `10`    | Redirects to follow from each request, `0` for none |
+| `--json`              | off     | One line of JSON per request instead of drawing     |
+| `--color`             | `auto`  | `auto`, `always` or `never`                         |
 
 `timeline run --help` has the full reference.
 
@@ -84,7 +85,16 @@ handshake, using a session from an earlier connection in the run.
 A request that got no response shows `ERR` with the reason underneath, and its
 bar stops in the phase that failed. A 4xx or 5xx is a response like any other.
 
-Redirects are not followed, so a 301 is drawn as a 301.
+Redirects are followed, and each hop is a request of its own, drawn on a row
+under the one that led to it:
+
+```
+ 1  302  #1  http://go.dev             523ms  ddwwww
+    200  #2  ↳ https://go.dev/         809ms       ccttwwwr
+```
+
+After `--max-redirects` hops the last redirect is left unfollowed, with
+`stopped after 10 redirects` under its row, and counts as a failed request.
 
 ## JSON
 
@@ -98,6 +108,7 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
 {
   "seq":0,
   "round":0,
+  "hop":0,
   "started_at":"2026-10-12T14:01:33.823986Z",
   "offset_ms":0.118,
   "method":"GET",
@@ -105,6 +116,7 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
   "status":200,
   "proto":"HTTP/2.0",
   "body_bytes":12085,
+  "location":null,
   "conn_id":1,
   "reused":false,
   "remote_addr":"216.239.34.21:443",
@@ -131,10 +143,12 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
 }
 ```
 
-Every key is always present. `conn_id` is the number the waterfall shows, and 0
-for a request that never got a connection. `resolved_ips` and `dial_attempts`
-describe the request's own dial, so they are empty and 0 on a reused
-connection. `timeline run --help` describes the format.
+Every key is always present. The hops of a redirect share a `seq`, and `hop`
+counts them from 0 for the URL that was given. `location` is the response's
+`Location` header, or `null` if it had none. `conn_id` is the number the
+waterfall shows, and 0 for a request that never got a connection.
+`resolved_ips` and `dial_attempts` describe the request's own dial, so they are
+empty and 0 on a reused connection. `timeline run --help` describes the format.
 
 ## Configuration
 

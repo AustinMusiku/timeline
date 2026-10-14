@@ -20,6 +20,9 @@ type Entry struct {
 	// repeat of the sequence it belongs to. Both are zero-based.
 	Seq   int
 	Round int
+	// Hop is how many redirects led to this request. Zero is the request
+	// as it was given.
+	Hop int
 
 	// Started is the wall-clock time the request began.
 	Started time.Time

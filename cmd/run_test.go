@@ -142,6 +142,73 @@ func TestRunJSONKeepsFailedRequests(t *testing.T) {
 	}
 }
 
+// redirects serves a 301 from / to /final, and a 302 back to / from /loop.
+func redirects(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			http.Redirect(w, r, "/final", http.StatusMovedPermanently)
+		case "/loop":
+			http.Redirect(w, r, "/loop", http.StatusFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestRunFollowsRedirects(t *testing.T) {
+	srv := redirects(t)
+
+	out, err := execute(t, "run", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	for _, row := range []string{" 1  301  #1  " + srv.URL + " ", "    200  #1  ↳ http://"} {
+		if !strings.Contains(out, row) {
+			t.Errorf("no row starts %q\n%s", row, out)
+		}
+	}
+
+	out, err = execute(t, "run", "--max-redirects", "0", srv.URL)
+	if err != nil || strings.Contains(out, "↳") || !strings.Contains(out, " 301  ") {
+		t.Errorf("with --max-redirects 0, error %v and output\n%s\nwant the 301 alone", err, out)
+	}
+}
+
+func TestRunStopsAtTheRedirectLimit(t *testing.T) {
+	srv := redirects(t)
+
+	out, err := execute(t, "run", "--max-redirects", "1", srv.URL+"/loop")
+	if err == nil || err.Error() != "1 of 2 requests failed" {
+		t.Errorf("error %v, want 1 of 2 requests failed", err)
+	}
+	if !strings.Contains(out, "stopped after 1 redirect\n") {
+		t.Errorf("the limit is not reported under its row\n%s", out)
+	}
+}
+
+func TestRunJSONMarksEachHop(t *testing.T) {
+	srv := redirects(t)
+
+	out, err := execute(t, "run", "--json", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	got := lines(t, out)
+	if len(got) != 2 {
+		t.Fatalf("wrote %d lines, want 2\n%s", len(got), out)
+	}
+	for i, l := range got {
+		if l["seq"] != float64(0) || l["hop"] != float64(i) {
+			t.Errorf("line %d is seq %v hop %v, want seq 0 hop %d", i, l["seq"], l["hop"], i)
+		}
+	}
+	if loc, ok := got[1]["location"]; got[0]["location"] != "/final" || !ok || loc != nil {
+		t.Errorf("location is %v then %v, want /final then null", got[0]["location"], got[1]["location"])
+	}
+}
+
 func TestRunRejectsBadInput(t *testing.T) {
 	tests := [][]string{
 		{"run"},

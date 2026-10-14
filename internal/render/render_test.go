@@ -172,6 +172,45 @@ func TestConnectionsAreListed(t *testing.T) {
 	}
 }
 
+func TestRedirectHopsAreDrawn(t *testing.T) {
+	get := func(url string) record.Request { return record.Request{Method: "GET", URL: url} }
+	run := &record.Run{Entries: []record.Entry{
+		{
+			Request:  get("http://example.com"),
+			Response: &record.Response{Status: 301},
+			Timings:  record.Timings{Wait: 10 * ms},
+			Conn:     record.Conn{ID: 1},
+		},
+		{
+			Hop: 1, Offset: 10 * ms,
+			Request:  get("https://example.com/"),
+			Response: &record.Response{Status: 302},
+			Timings:  record.Timings{Wait: 20 * ms},
+			Conn:     record.Conn{ID: 2},
+			Error:    "stopped after 1 redirect",
+		},
+		{
+			Seq: 1, Offset: 30 * ms,
+			Request:  get("https://example.com/about"),
+			Response: &record.Response{Status: 200},
+			Timings:  record.Timings{Wait: 20 * ms},
+			Conn:     record.Conn{ID: 2, Reused: true},
+		},
+	}}
+	got := draw(t, run, Options{Width: 80})
+
+	for _, want := range []string{
+		"\n 1  301  #1  http://example.com  ",
+		"\n    302  #2  ↳ https://example.com/  ",
+		"\n             stopped after 1 redirect\n",
+		"\n 2  200  #2  https://example.com/about  ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no line contains %q\n%s", want, got)
+		}
+	}
+}
+
 func TestOverlappingRowsAreSpacedApart(t *testing.T) {
 	req := record.Request{Method: "GET", URL: "https://example.com"}
 	ok := &record.Response{Status: 200}
