@@ -2,6 +2,14 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.4.0] - 2026-10-14
+
+### Features
+
+- Follow redirects in the collector
+- Draw redirect hops and add hop and location to the JSON
+- **Breaking:** Follow up to 10 redirects by default
+
 ## [0.3.0] - 2026-10-13
 
 ### Features
