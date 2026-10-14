@@ -415,6 +415,135 @@ func TestRedirectIsRecordedNotFollowed(t *testing.T) {
 	}
 }
 
+func TestRedirectsAreFollowedHopByHop(t *testing.T) {
+	other := httptest.NewServer(http.HandlerFunc(hello))
+	defer other.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			http.Redirect(w, r, "/next", http.StatusMovedPermanently)
+		case "/next":
+			http.Redirect(w, r, other.URL+"/done", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+
+	seen := 0
+	opts := Options{MaxRedirects: 10, OnEntry: func(record.Entry) { seen++ }}
+	got, err := run(t.Context(), transport(srv), []Request{{URL: srv.URL}, {URL: other.URL}}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		seq, hop, status int
+		url              string
+	}{
+		{0, 0, 301, srv.URL},
+		{0, 1, 302, srv.URL + "/next"},
+		{0, 2, 200, other.URL + "/done"},
+		{1, 0, 200, other.URL},
+	}
+	if len(got.Entries) != len(want) || seen != len(want) {
+		t.Fatalf("got %d entries and saw %d, want %d: %+v", len(got.Entries), seen, len(want), got.Entries)
+	}
+	for i, w := range want {
+		e := got.Entries[i]
+		if e.Error != "" || e.Response == nil {
+			t.Fatalf("entry %d failed: %s", i, e.Error)
+		}
+		if e.Seq != w.seq || e.Hop != w.hop || e.Response.Status != w.status || e.Request.URL != w.url {
+			t.Errorf("entry %d is seq %d hop %d, %d from %s; want seq %d hop %d, %d from %s",
+				i, e.Seq, e.Hop, e.Response.Status, e.Request.URL, w.seq, w.hop, w.status, w.url)
+		}
+		if i > 0 {
+			prev := got.Entries[i-1]
+			if end := prev.Offset + prev.Timings.Total(); e.Offset < end {
+				t.Errorf("entry %d started at %v, before entry %d ended at %v", i, e.Offset, i-1, end)
+			}
+		}
+	}
+	if a, b := got.Entries[1].Conn.ID, got.Entries[2].Conn.ID; a == b {
+		t.Errorf("the hop to another server reused connection #%d", a)
+	}
+}
+
+func TestRedirectsStopAtTheLimit(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, "/again", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	got, err := run(t.Context(), transport(srv), []Request{{URL: srv.URL}}, Options{MaxRedirects: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(got.Entries); n != 3 || hits.Load() != 3 {
+		t.Fatalf("got %d entries and the server saw %d requests, want 3 of each", n, hits.Load())
+	}
+	for i, e := range got.Entries {
+		want := ""
+		if i == 2 {
+			want = "stopped after 2 redirects"
+		}
+		if e.Response == nil || e.Response.Status != http.StatusFound || e.Error != want {
+			t.Errorf("entry %d has response %v and error %q, want a 302 and %q", i, e.Response, e.Error, want)
+		}
+	}
+}
+
+func TestRedirect(t *testing.T) {
+	header := http.Header{"Authorization": {"Bearer x"}, "Cookie": {"a=1"}, "Accept": {"text/html"}}
+	tests := []struct {
+		name     string
+		method   string
+		status   int
+		location string
+		want     string // method and URL, empty for no redirect
+		creds    bool
+	}{
+		{"a relative location", "GET", 302, "z?q=1", "GET https://a.example/x/z?q=1", true},
+		{"303 turns a POST into a GET", "POST", 303, "/done", "GET https://a.example/done", true},
+		{"307 keeps the method", "POST", 307, "/again", "POST https://a.example/again", true},
+		{"301 keeps a HEAD", "HEAD", 301, "/moved", "HEAD https://a.example/moved", true},
+		{"another host gets no credentials", "GET", 308, "https://b.example/", "GET https://b.example/", false},
+		{"no location", "GET", 302, "", "", false},
+		{"not a redirect", "GET", 201, "/made", "", false},
+		{"304 is not a redirect", "GET", 304, "/x", "", false},
+		{"a scheme it cannot send", "GET", 302, "ftp://a.example/", "", false},
+	}
+	for _, tc := range tests {
+		req, err := newRequest(Request{Method: tc.method, URL: "https://a.example/x/y", Header: header})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := &record.Response{Status: tc.status, Header: http.Header{}}
+		if tc.location != "" {
+			resp.Header.Set("Location", tc.location)
+		}
+
+		next := redirect(req, resp)
+		got := ""
+		if next != nil {
+			got = next.Method + " " + next.URL.String()
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+			continue
+		}
+		if next == nil {
+			continue
+		}
+		if creds := next.Header.Get("Authorization") != "" && next.Header.Get("Cookie") != ""; creds != tc.creds {
+			t.Errorf("%s: credentials sent is %v, want %v", tc.name, creds, tc.creds)
+		}
+		if next.Header.Get("Accept") != "text/html" {
+			t.Errorf("%s: the Accept header was dropped", tc.name)
+		}
+	}
+}
+
 func TestConcurrentRequestsOverlap(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 
@@ -31,6 +32,9 @@ type Options struct {
 	Concurrency int
 	// Timeout bounds each request, body included. Zero means no limit.
 	Timeout time.Duration
+	// MaxRedirects is how many redirects to follow from each request. Zero
+	// follows none.
+	MaxRedirects int
 	// OnEntry, if set, is called with each entry as its request finishes,
 	// one call at a time.
 	OnEntry func(record.Entry)
@@ -39,7 +43,7 @@ type Options struct {
 // Run sends reqs in order, Repeat times over, and returns one entry per
 // request sent. A failed request is recorded in its entry. If ctx is
 // cancelled, Run returns the entries so far along with the error.
-// Redirects are not followed.
+// A redirect that is followed adds an entry for each hop.
 func Run(ctx context.Context, reqs []Request, opts Options) (*record.Run, error) {
 	return run(ctx, http.DefaultTransport.(*http.Transport).Clone(), reqs, opts)
 }
@@ -47,6 +51,7 @@ func Run(ctx context.Context, reqs []Request, opts Options) (*record.Run, error)
 // run is Run on the given transport.
 func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) (*record.Run, error) {
 	repeat, concurrency := max(opts.Repeat, 1), max(opts.Concurrency, 1)
+	redirects := max(opts.MaxRedirects, 0)
 
 	tmpls := make([]*http.Request, len(reqs))
 	for i, r := range reqs {
@@ -80,7 +85,8 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 	}
 
 	started := time.Now()
-	entries := make([]record.Entry, repeat*len(tmpls))
+	// One chain per request: the request itself, then its redirects.
+	chains := make([][]record.Entry, repeat*len(tmpls))
 	var seen conns
 	sent := 0
 
@@ -96,17 +102,32 @@ send:
 				break send
 			}
 
-			e := &entries[sent]
+			chain := &chains[sent]
 			sent++
 
 			wg.Go(func() {
 				defer func() { <-slots }()
-				*e = do(ctx, client, &seen, tmpl, opts.Timeout, started)
-				e.Seq, e.Round = seq, round
-				if opts.OnEntry != nil {
-					emit.Lock()
-					defer emit.Unlock()
-					opts.OnEntry(*e)
+				for req, hop := tmpl, 0; req != nil; hop++ {
+					e := do(ctx, client, &seen, req, opts.Timeout, started)
+					e.Seq, e.Round, e.Hop = seq, round, hop
+
+					req = redirect(req, e.Response)
+					if req != nil && hop >= redirects {
+						if redirects > 0 {
+							e.Error = stopped(redirects)
+						}
+						req = nil
+					}
+					if e.Error != "" || ctx.Err() != nil {
+						req = nil
+					}
+
+					*chain = append(*chain, e)
+					if opts.OnEntry != nil {
+						emit.Lock()
+						opts.OnEntry(e)
+						emit.Unlock()
+					}
 				}
 			})
 		}
@@ -115,7 +136,53 @@ send:
 	}
 	wg.Wait()
 
-	return &record.Run{Started: started, Entries: entries[:sent]}, ctx.Err()
+	return &record.Run{Started: started, Entries: slices.Concat(chains[:sent]...)}, ctx.Err()
+}
+
+// stopped is the error of a redirect left unfollowed at the limit.
+func stopped(limit int) string {
+	if limit == 1 {
+		return "stopped after 1 redirect"
+	}
+	return fmt.Sprintf("stopped after %d redirects", limit)
+}
+
+// redirect returns the request that resp sends req on to, or nil if there
+// is nowhere to go.
+func redirect(req *http.Request, resp *record.Response) *http.Request {
+	if resp == nil {
+		return nil
+	}
+	method := req.Method
+	switch resp.Status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther:
+		if method != http.MethodHead {
+			method = http.MethodGet
+		}
+	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+	default:
+		return nil
+	}
+
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return nil
+	}
+	u, err := req.URL.Parse(loc)
+	if err != nil {
+		return nil
+	}
+	next, err := newRequest(Request{Method: method, URL: u.String(), Header: req.Header})
+	if err != nil {
+		return nil
+	}
+	// Credentials stay with the host they were given for.
+	if next.URL.Host != req.URL.Host {
+		for _, h := range []string{"Authorization", "Cookie", "Proxy-Authorization"} {
+			next.Header.Del(h)
+		}
+	}
+	return next
 }
 
 func newRequest(r Request) (*http.Request, error) {
