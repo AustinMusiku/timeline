@@ -10,10 +10,12 @@ import (
 
 // jsonEntry is one line of JSON output. Every key is always present, so a
 // phase that did not happen is zero, a request with no response has status 0
-// and one with no connection has conn_id 0.
+// and one with no connection has conn_id 0. location is null for a response
+// without the header.
 type jsonEntry struct {
 	Seq          int      `json:"seq"`
 	Round        int      `json:"round"`
+	Hop          int      `json:"hop"`
 	StartedAt    string   `json:"started_at"`
 	OffsetMS     float64  `json:"offset_ms"`
 	Method       string   `json:"method"`
@@ -21,6 +23,7 @@ type jsonEntry struct {
 	Status       int      `json:"status"`
 	Proto        string   `json:"proto"`
 	BodyBytes    int64    `json:"body_bytes"`
+	Location     *string  `json:"location"`
 	ConnID       int      `json:"conn_id"`
 	Reused       bool     `json:"reused"`
 	RemoteAddr   string   `json:"remote_addr"`
@@ -48,6 +51,7 @@ func JSON(w io.Writer, e record.Entry) error {
 	line := jsonEntry{
 		Seq:          e.Seq,
 		Round:        e.Round,
+		Hop:          e.Hop,
 		StartedAt:    e.Started.UTC().Format("2006-01-02T15:04:05.000000Z"),
 		OffsetMS:     millis(e.Offset),
 		Method:       e.Request.Method,
@@ -74,6 +78,9 @@ func JSON(w io.Writer, e record.Entry) error {
 	}
 	if r := e.Response; r != nil {
 		line.Status, line.Proto, line.BodyBytes = r.Status, r.Proto, r.BodySize
+		if loc := r.Header.Get("Location"); loc != "" {
+			line.Location = &loc
+		}
 	}
 
 	enc := json.NewEncoder(w)

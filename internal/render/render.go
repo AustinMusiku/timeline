@@ -82,6 +82,9 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 		if e.Request.Method != http.MethodGet {
 			labels[i] = e.Request.Method + " " + labels[i]
 		}
+		if e.Hop > 0 {
+			labels[i] = "↳ " + labels[i]
+		}
 		labelW = max(labelW, utf8.RuneCountInString(labels[i]))
 		if e.Conn.ID > 0 {
 			connW = max(connW, len(connTag(e.Conn.ID)))
@@ -90,7 +93,8 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	span = max(span, 1)
 
 	// A row reads: seq, status, connection, label, total, bar. The
-	// connection is left out of a run that never made one.
+	// connection is left out of a run that never made one, and the seq of
+	// a redirect's hops.
 	lead := 1 + seqW + 2 + statusW + 2
 	if connW > 0 {
 		lead += connW + 2
@@ -144,8 +148,12 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 			}
 			conn = in.paint(gray, conn) + strings.Repeat(" ", connW-len(conn)+2)
 		}
-		fmt.Fprintf(&b, " %*d  %s  %s%-*s  %*s  %s\n",
-			seqW, e.Seq+1, status, conn, labelW, clip(labels[i], labelW),
+		seq := ""
+		if e.Hop == 0 {
+			seq = strconv.Itoa(e.Seq + 1)
+		}
+		fmt.Fprintf(&b, " %*s  %s  %s%-*s  %*s  %s\n",
+			seqW, seq, status, conn, labelW, clip(labels[i], labelW),
 			totalW, human(e.Timings.Total()), bar)
 		if e.Error != "" {
 			fmt.Fprintf(&b, "%*s%s\n", lead, "", e.Error)
