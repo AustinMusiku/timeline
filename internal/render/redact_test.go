@@ -2,6 +2,7 @@ package render
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +21,30 @@ func TestRedactURL(t *testing.T) {
 		if got := redactURL(in); got != want {
 			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestRedactHeader(t *testing.T) {
+	h := http.Header{
+		"Authorization":       {"Bearer secret"},
+		"Proxy-Authorization": {"secret"},
+		"Cookie":              {"session=secret; theme=secret", "lone"},
+		"Accept":              {"text/html", "*/*"},
+	}
+	want := http.Header{
+		"Authorization":       {"Bearer xxxxx"},
+		"Proxy-Authorization": {"xxxxx"},
+		"Cookie":              {"session=xxxxx; theme=xxxxx", "lone=xxxxx"},
+		"Accept":              {"text/html", "*/*"},
+	}
+	if got := redactHeader(h); !reflect.DeepEqual(got, want) {
+		t.Errorf("redactHeader(%v)\n got %v\nwant %v", h, got, want)
+	}
+	if h.Get("Authorization") != "Bearer secret" {
+		t.Errorf("redactHeader changed the header it was given")
+	}
+	if got := redactHeader(nil); got == nil || len(got) != 0 {
+		t.Errorf("redactHeader(nil) = %#v, want an empty header", got)
 	}
 }
 

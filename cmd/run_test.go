@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -236,6 +237,24 @@ func TestRunSendsHeaders(t *testing.T) {
 		if hosts[i] != "example.com" {
 			t.Errorf("request %d was for host %q, want example.com", i, hosts[i])
 		}
+	}
+}
+
+func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "-H", "Authorization: Bearer secret", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "secret") {
+		t.Errorf("the token is in the output\n%s", out)
+	}
+	h, _ := lines(t, out)[0]["request_headers"].(map[string]any)
+	want := map[string]any{"Authorization": []any{"Bearer xxxxx"}, "Accept-Encoding": []any{"gzip"}}
+	if !reflect.DeepEqual(h, want) {
+		t.Errorf("request_headers is %v, want %v", h, want)
 	}
 }
 
