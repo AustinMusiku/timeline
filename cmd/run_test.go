@@ -264,6 +264,33 @@ func TestRunSendsTheMethod(t *testing.T) {
 	}
 }
 
+func TestRunSendsBasicAuth(t *testing.T) {
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if user, pass, ok := r.BasicAuth(); ok && (user != "me" || pass != "se:cret") {
+			t.Errorf("server saw %q and %q, want me and se:cret", user, pass)
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "-u", "me:se:cret", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "se:cret") || !strings.Contains(out, `"Authorization":["Basic xxxxx"]`) {
+		t.Errorf("the JSON does not hide the credentials\n%s", out)
+	}
+
+	out, err = execute(t, "run", "-u", "me:se:cret", "-H", "Authorization: Bearer x", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if len(auths) != 2 || !strings.HasPrefix(auths[0], "Basic ") || auths[1] != "Bearer x" {
+		t.Errorf("server saw Authorization %q, want basic auth then the -H value", auths)
+	}
+}
+
 func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -289,6 +316,7 @@ func TestRunRejectsBadInput(t *testing.T) {
 		{"run", "--color", "sometimes", "http://example.com"},
 		{"run", "-H", "X-Test", "http://example.com"},
 		{"run", "-X", "NOT A METHOD", "http://example.com"},
+		{"run", "-u", "me", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {

@@ -2,6 +2,7 @@
 package sequence
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"slices"
@@ -39,6 +40,11 @@ func (d Defaults) apply(r collect.Request) collect.Request {
 		r.Header[name] = slices.Clone(values)
 	}
 	return r
+}
+
+// BasicAuth is the Authorization value for user and password.
+func BasicAuth(user, password string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+password))
 }
 
 // ParseHeader splits a "Name: value" line. Errors leave the value out, since

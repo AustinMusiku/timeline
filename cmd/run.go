@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -73,6 +75,7 @@ func init() {
 
 	// These can carry credentials, so they come from the command line only.
 	f.StringArrayP("header", "H", nil, "header to send with every request, as 'Name: value'")
+	f.StringP("user", "u", "", "user:password for basic auth on every request")
 }
 
 // defaults reads the flags that apply to every request.
@@ -91,6 +94,22 @@ func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
 			d.Header = http.Header{}
 		}
 		d.Header.Add(name, value)
+	}
+
+	userpass, err := f.GetString("user")
+	if err != nil || userpass == "" {
+		return d, err
+	}
+	user, password, ok := strings.Cut(userpass, ":")
+	if !ok {
+		return d, errors.New("--user needs user:password")
+	}
+	// As in curl, an Authorization from -H wins.
+	if d.Header.Get("Authorization") == "" {
+		if d.Header == nil {
+			d.Header = http.Header{}
+		}
+		d.Header.Set("Authorization", sequence.BasicAuth(user, password))
 	}
 	return d, nil
 }
