@@ -201,6 +201,11 @@ func newRequest(r Request) (*http.Request, error) {
 	if r.Header != nil {
 		req.Header = r.Header.Clone()
 	}
+	// The client ignores a Host header and sends req.Host.
+	if host := req.Header.Get("Host"); host != "" {
+		req.Host = host
+		req.Header.Del("Host")
+	}
 	// The transport no longer offers gzip itself.
 	if req.Header.Get("Accept-Encoding") == "" {
 		req.Header.Set("Accept-Encoding", "gzip")

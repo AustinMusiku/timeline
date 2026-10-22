@@ -18,7 +18,11 @@ func execute(t *testing.T, args ...string) (string, error) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // keep the user's own config out of it
 
 	reset := func(f *pflag.Flag) {
-		f.Value.Set(f.DefValue)
+		if s, ok := f.Value.(pflag.SliceValue); ok {
+			s.Replace(nil)
+		} else {
+			f.Value.Set(f.DefValue)
+		}
 		f.Changed = false
 	}
 	rootCmd.PersistentFlags().VisitAll(reset)
@@ -209,11 +213,38 @@ func TestRunJSONMarksEachHop(t *testing.T) {
 	}
 }
 
+func TestRunSendsHeaders(t *testing.T) {
+	var got []http.Header
+	var hosts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header)
+		hosts = append(hosts, r.Host)
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "-H", "X-Test: a, b", "--header", "x-test:c", "-H", "Host: example.com", srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if len(got) != 2 {
+		t.Fatalf("server saw %d requests, want 2", len(got))
+	}
+	for i, h := range got {
+		if v := h.Values("X-Test"); len(v) != 2 || v[0] != "a, b" || v[1] != "c" {
+			t.Errorf("request %d had X-Test %q, want \"a, b\" and \"c\"", i, v)
+		}
+		if hosts[i] != "example.com" {
+			t.Errorf("request %d was for host %q, want example.com", i, hosts[i])
+		}
+	}
+}
+
 func TestRunRejectsBadInput(t *testing.T) {
 	tests := [][]string{
 		{"run"},
 		{"run", "example.com"},
 		{"run", "--color", "sometimes", "http://example.com"},
+		{"run", "-H", "X-Test", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {

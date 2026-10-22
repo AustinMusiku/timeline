@@ -3,18 +3,21 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
 	"github.com/AustinMusiku/timeline/internal/collect"
 	"github.com/AustinMusiku/timeline/internal/record"
 	"github.com/AustinMusiku/timeline/internal/render"
+	"github.com/AustinMusiku/timeline/internal/sequence"
 )
 
 var runCmd = &cobra.Command{
@@ -66,6 +69,29 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	viper.BindPFlags(f)
+
+	// These can carry credentials, so they come from the command line only.
+	f.StringArrayP("header", "H", nil, "header to send with every request, as 'Name: value'")
+}
+
+// defaults reads the flags that apply to every request.
+func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
+	var d sequence.Defaults
+	lines, err := f.GetStringArray("header")
+	if err != nil {
+		return d, err
+	}
+	for i, line := range lines {
+		name, value, err := sequence.ParseHeader(line)
+		if err != nil {
+			return d, fmt.Errorf("header %d: %w", i+1, err)
+		}
+		if d.Header == nil {
+			d.Header = http.Header{}
+		}
+		d.Header.Add(name, value)
+	}
+	return d, nil
 }
 
 func runSequence(cmd *cobra.Command, args []string) error {
@@ -75,10 +101,11 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	reqs := make([]collect.Request, len(args))
-	for i, u := range args {
-		reqs[i] = collect.Request{URL: u}
+	d, err := defaults(cmd.Flags())
+	if err != nil {
+		return err
 	}
+	reqs := sequence.FromURLs(args, d)
 	repeat := max(viper.GetInt("repeat"), 1)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
