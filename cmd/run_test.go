@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -291,6 +292,38 @@ func TestRunSendsBasicAuth(t *testing.T) {
 	}
 }
 
+func TestRunAsksForAMissingPassword(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, pass, _ := r.BasicAuth(); user != "me" || pass != "secret" {
+			t.Errorf("server saw %q and %q, want me and secret", user, pass)
+		}
+	}))
+	defer srv.Close()
+
+	ask := askPassword
+	defer func() { askPassword = ask }()
+	var asked []string
+	askPassword = func(user string) (string, error) {
+		asked = append(asked, user)
+		return "secret", nil
+	}
+
+	if out, err := execute(t, "run", "-u", "me", srv.URL); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if out, err := execute(t, "run", "-u", "me:secret", srv.URL); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if !slices.Equal(asked, []string{"me"}) {
+		t.Errorf("asked for a password for %q, want only for me without one", asked)
+	}
+
+	askPassword = func(string) (string, error) { return "", errors.New("no terminal") }
+	if out, err := execute(t, "run", "-u", "me", srv.URL); err == nil || out != "" {
+		t.Errorf("error %v, output %q; want an error and no output", err, out)
+	}
+}
+
 func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -316,7 +349,6 @@ func TestRunRejectsBadInput(t *testing.T) {
 		{"run", "--color", "sometimes", "http://example.com"},
 		{"run", "-H", "X-Test", "http://example.com"},
 		{"run", "-X", "NOT A METHOD", "http://example.com"},
-		{"run", "-u", "me", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {

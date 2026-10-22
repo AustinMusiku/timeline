@@ -102,7 +102,9 @@ func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
 	}
 	user, password, ok := strings.Cut(userpass, ":")
 	if !ok {
-		return d, errors.New("--user needs user:password")
+		if password, err = askPassword(user); err != nil {
+			return d, err
+		}
 	}
 	// As in curl, an Authorization from -H wins.
 	if d.Header.Get("Authorization") == "" {
@@ -178,6 +180,36 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))
 	}
 	return nil
+}
+
+// askPassword reads a password from the terminal without echoing it.
+var askPassword = func(user string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", errors.New("--user has no password, and there is no terminal to ask for one on")
+	}
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	// Echo stays off if an interrupt kills the process mid-prompt.
+	sigs, done := make(chan os.Signal, 1), make(chan struct{})
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer func() { signal.Stop(sigs); close(done) }()
+	go func() {
+		select {
+		case <-sigs:
+			term.Restore(fd, state)
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+
+	fmt.Fprintf(os.Stderr, "Password for %s: ", user)
+	password, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	return string(password), err
 }
 
 func useColor(mode string, out io.Writer) (bool, error) {
