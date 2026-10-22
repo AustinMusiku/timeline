@@ -55,7 +55,7 @@ func JSON(w io.Writer, e record.Entry) error {
 		StartedAt:    e.Started.UTC().Format("2006-01-02T15:04:05.000000Z"),
 		OffsetMS:     millis(e.Offset),
 		Method:       e.Request.Method,
-		URL:          e.Request.URL,
+		URL:          redactURL(e.Request.URL),
 		ConnID:       c.ID,
 		Reused:       c.Reused,
 		RemoteAddr:   c.RemoteAddr,
@@ -79,6 +79,7 @@ func JSON(w io.Writer, e record.Entry) error {
 	if r := e.Response; r != nil {
 		line.Status, line.Proto, line.BodyBytes = r.Status, r.Proto, r.BodySize
 		if loc := r.Header.Get("Location"); loc != "" {
+			loc = redactURL(loc)
 			line.Location = &loc
 		}
 	}
