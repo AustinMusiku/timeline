@@ -12,6 +12,7 @@ import (
 
 // Defaults apply to every request of a sequence. A request's own values win.
 type Defaults struct {
+	Method string
 	Header http.Header
 }
 
@@ -25,6 +26,9 @@ func FromURLs(urls []string, d Defaults) []collect.Request {
 }
 
 func (d Defaults) apply(r collect.Request) collect.Request {
+	if r.Method == "" {
+		r.Method = d.Method
+	}
 	for name, values := range d.Header {
 		if _, ok := r.Header[name]; ok {
 			continue

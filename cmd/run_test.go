@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,6 +241,29 @@ func TestRunSendsHeaders(t *testing.T) {
 	}
 }
 
+func TestRunSendsTheMethod(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/done", http.StatusSeeOther)
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "-X", "POST", srv.URL, srv.URL+"/other")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	// A 303 turns the POST into a GET.
+	if want := []string{"POST", "GET", "POST"}; !slices.Equal(methods, want) {
+		t.Errorf("server saw %v, want %v", methods, want)
+	}
+	if !strings.Contains(out, " 200  #1  POST http://") {
+		t.Errorf("the method is not drawn\n%s", out)
+	}
+}
+
 func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -264,6 +288,7 @@ func TestRunRejectsBadInput(t *testing.T) {
 		{"run", "example.com"},
 		{"run", "--color", "sometimes", "http://example.com"},
 		{"run", "-H", "X-Test", "http://example.com"},
+		{"run", "-X", "NOT A METHOD", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {

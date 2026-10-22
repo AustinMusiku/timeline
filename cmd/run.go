@@ -67,6 +67,7 @@ func init() {
 	f.IntP("concurrency", "c", 1, "requests to keep in flight at once")
 	f.Duration("timeout", 30*time.Second, "time limit for each request, 0 for none")
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
+	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	viper.BindPFlags(f)
 
@@ -76,7 +77,7 @@ func init() {
 
 // defaults reads the flags that apply to every request.
 func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
-	var d sequence.Defaults
+	d := sequence.Defaults{Method: viper.GetString("method")}
 	lines, err := f.GetStringArray("header")
 	if err != nil {
 		return d, err

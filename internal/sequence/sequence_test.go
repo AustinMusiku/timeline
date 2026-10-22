@@ -36,12 +36,18 @@ func TestParseHeader(t *testing.T) {
 }
 
 func TestDefaultsGiveWayToTheRequest(t *testing.T) {
-	d := Defaults{Header: http.Header{"Accept": {"a"}, "X-Two": {"1", "2"}}}
+	d := Defaults{Method: "POST", Header: http.Header{"Accept": {"a"}, "X-Two": {"1", "2"}}}
 
-	got := d.apply(collect.Request{URL: "u", Header: http.Header{"Accept": {"b"}}})
+	got := d.apply(collect.Request{Method: "PUT", URL: "u", Header: http.Header{"Accept": {"b"}}})
 	want := http.Header{"Accept": {"b"}, "X-Two": {"1", "2"}}
 	if !reflect.DeepEqual(got.Header, want) {
 		t.Errorf("header %v, want %v", got.Header, want)
+	}
+	if got.Method != "PUT" {
+		t.Errorf("method %q, want PUT", got.Method)
+	}
+	if got := d.apply(collect.Request{URL: "u"}); got.Method != "POST" {
+		t.Errorf("method %q, want the default POST", got.Method)
 	}
 
 	reqs := FromURLs([]string{"a", "b"}, d)
