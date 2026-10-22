@@ -28,6 +28,11 @@ var runCmd = &cobra.Command{
 	Long: `Run sends a GET to each URL in turn and draws every request on one shared
 time axis, with each bar split into the phases the request went through.
 
+--method, --header and --user apply to every request. --user with no password
+asks for one on the terminal. An Authorization from --header wins over --user.
+--header and --user are read from the command line only, never from the
+environment or the config file.
+
 Connections stay open for the length of the run, so repeating the sequence
 with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
@@ -47,6 +52,10 @@ The hops of a redirect share a seq, and hop counts them from 0 for the URL
 that was given. location is the response's Location header, or null if it had
 none.
 
+request_headers maps each header timeline set to its values. Credentials are
+hidden: an Authorization keeps its scheme and a Cookie its names. A password in
+url or location shows as xxxxx.
+
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
 tls_resumed that the handshake which opened it resumed an earlier session.
@@ -56,6 +65,8 @@ retried.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
   timeline run --concurrency 4 https://example.com/a https://example.com/b
+  timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
+  timeline run -X POST -u me https://api.example.com/login
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,

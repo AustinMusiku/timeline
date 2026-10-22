@@ -26,16 +26,34 @@ timeline run https://example.com https://example.com/about
 
 Each URL gets a GET, one after the other, in the order given.
 
-| Flag                  | Default | What it does                                        |
-| --------------------- | ------- | --------------------------------------------------- |
-| `-n`, `--repeat`      | `1`     | Times to run the whole sequence                     |
-| `-c`, `--concurrency` | `1`     | Requests to keep in flight at once                  |
-| `--timeout`           | `30s`   | Time limit for each request, `0` for none           |
-| `--max-redirects`     | `10`    | Redirects to follow from each request, `0` for none |
-| `--json`              | off     | One line of JSON per request instead of drawing     |
-| `--color`             | `auto`  | `auto`, `always` or `never`                         |
+| Flag                  | Default | What it does                                         |
+| --------------------- | ------- | ---------------------------------------------------- |
+| `-n`, `--repeat`      | `1`     | Times to run the whole sequence                      |
+| `-c`, `--concurrency` | `1`     | Requests to keep in flight at once                   |
+| `--timeout`           | `30s`   | Time limit for each request, `0` for none            |
+| `--max-redirects`     | `10`    | Redirects to follow from each request, `0` for none  |
+| `-X`, `--method`      | `GET`   | Method for every request                             |
+| `-H`, `--header`      |         | `Name: value` to send with every request, repeatable |
+| `-u`, `--user`        |         | `user:password` for basic auth on every request      |
+| `--json`              | off     | One line of JSON per request instead of drawing      |
+| `--color`             | `auto`  | `auto`, `always` or `never`                          |
 
 `timeline run --help` has the full reference.
+
+### Authentication
+
+```sh
+timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
+timeline run -u me https://api.example.com/me
+```
+
+`-u` with no password asks for one, so it stays out of your shell history. An
+`Authorization` from `-H` wins over `-u`. Credentials are not sent on to
+another host when a redirect leads there.
+
+Output never shows credentials: a password in a URL becomes `xxxxx`, an
+`Authorization` keeps only its scheme (`Bearer xxxxx`), and a `Cookie` only its
+names (`session=xxxxx`).
 
 ## Reading the waterfall
 
@@ -113,6 +131,7 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
   "offset_ms":0.118,
   "method":"GET",
   "url":"https://go.dev",
+  "request_headers":{"Accept-Encoding":["gzip"]},
   "status":200,
   "proto":"HTTP/2.0",
   "body_bytes":12085,
@@ -144,7 +163,9 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
 ```
 
 Every key is always present. The hops of a redirect share a `seq`, and `hop`
-counts them from 0 for the URL that was given. `location` is the response's
+counts them from 0 for the URL that was given. `request_headers` are the
+headers timeline set, with credentials hidden; Go's client adds `Host`,
+`User-Agent` and the like as it sends. `location` is the response's
 `Location` header, or `null` if it had none. `conn_id` is the number the
 waterfall shows, and 0 for a request that never got a connection.
 `resolved_ips` and `dial_attempts` describe the request's own dial, so they are
@@ -167,7 +188,8 @@ timeout: 5s
 color: never
 ```
 
-`--config` points at a different file. `NO_COLOR` is honoured.
+`--config` points at a different file. `NO_COLOR` is honoured. `-H` and `-u`
+can carry credentials, so they are read from the command line only.
 
 ## Exit status
 
@@ -176,7 +198,8 @@ and 0 otherwise. Ctrl-C still draws what was collected.
 
 ## Not yet
 
-- Methods other than GET, headers and request bodies
+- Request bodies
+- Sequence files, with a method, headers and body for each step
 - HAR files as input
 - Windows builds
 
