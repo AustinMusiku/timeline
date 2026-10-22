@@ -47,6 +47,9 @@ type Entry struct {
 type Request struct {
 	Method string
 	URL    string
+	// Header is what the request was given. The client adds Host,
+	// User-Agent and the like as it sends, and those are not here.
+	Header http.Header
 }
 
 type Response struct {

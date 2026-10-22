@@ -1,20 +1,25 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 
 	"github.com/AustinMusiku/timeline/internal/collect"
 	"github.com/AustinMusiku/timeline/internal/record"
 	"github.com/AustinMusiku/timeline/internal/render"
+	"github.com/AustinMusiku/timeline/internal/sequence"
 )
 
 var runCmd = &cobra.Command{
@@ -22,6 +27,11 @@ var runCmd = &cobra.Command{
 	Short: "Time a sequence of requests and draw them on one axis",
 	Long: `Run sends a GET to each URL in turn and draws every request on one shared
 time axis, with each bar split into the phases the request went through.
+
+--method, --header and --user apply to every request. --user with no password
+asks for one on the terminal. An Authorization from --header wins over --user.
+--header and --user are read from the command line only, never from the
+environment or the config file.
 
 Connections stay open for the length of the run, so repeating the sequence
 with --repeat shows a cold first round followed by warm ones. Each row is
@@ -42,6 +52,10 @@ The hops of a redirect share a seq, and hop counts them from 0 for the URL
 that was given. location is the response's Location header, or null if it had
 none.
 
+request_headers maps each header timeline set to its values. Credentials are
+hidden: an Authorization keeps its scheme and a Cookie its names. A password in
+url or location shows as xxxxx.
+
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
 tls_resumed that the handshake which opened it resumed an earlier session.
@@ -51,6 +65,8 @@ retried.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
   timeline run --concurrency 4 https://example.com/a https://example.com/b
+  timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
+  timeline run -X POST -u me https://api.example.com/login
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,
@@ -64,8 +80,51 @@ func init() {
 	f.IntP("concurrency", "c", 1, "requests to keep in flight at once")
 	f.Duration("timeout", 30*time.Second, "time limit for each request, 0 for none")
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
+	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	viper.BindPFlags(f)
+
+	// These can carry credentials, so they come from the command line only.
+	f.StringArrayP("header", "H", nil, "header to send with every request, as 'Name: value'")
+	f.StringP("user", "u", "", "user:password for basic auth on every request")
+}
+
+// defaults reads the flags that apply to every request.
+func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
+	d := sequence.Defaults{Method: viper.GetString("method")}
+	lines, err := f.GetStringArray("header")
+	if err != nil {
+		return d, err
+	}
+	for i, line := range lines {
+		name, value, err := sequence.ParseHeader(line)
+		if err != nil {
+			return d, fmt.Errorf("header %d: %w", i+1, err)
+		}
+		if d.Header == nil {
+			d.Header = http.Header{}
+		}
+		d.Header.Add(name, value)
+	}
+
+	userpass, err := f.GetString("user")
+	if err != nil || userpass == "" {
+		return d, err
+	}
+	user, password, ok := strings.Cut(userpass, ":")
+	if !ok {
+		if password, err = askPassword(user); err != nil {
+			return d, err
+		}
+	}
+	// As in curl, an Authorization from -H wins.
+	if d.Header.Get("Authorization") == "" {
+		if d.Header == nil {
+			d.Header = http.Header{}
+		}
+		d.Header.Set("Authorization", sequence.BasicAuth(user, password))
+	}
+	return d, nil
 }
 
 func runSequence(cmd *cobra.Command, args []string) error {
@@ -75,10 +134,11 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	reqs := make([]collect.Request, len(args))
-	for i, u := range args {
-		reqs[i] = collect.Request{URL: u}
+	d, err := defaults(cmd.Flags())
+	if err != nil {
+		return err
 	}
+	reqs := sequence.FromURLs(args, d)
 	repeat := max(viper.GetInt("repeat"), 1)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -131,6 +191,36 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))
 	}
 	return nil
+}
+
+// askPassword reads a password from the terminal without echoing it.
+var askPassword = func(user string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", errors.New("--user has no password, and there is no terminal to ask for one on")
+	}
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	// Echo stays off if an interrupt kills the process mid-prompt.
+	sigs, done := make(chan os.Signal, 1), make(chan struct{})
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer func() { signal.Stop(sigs); close(done) }()
+	go func() {
+		select {
+		case <-sigs:
+			term.Restore(fd, state)
+			fmt.Fprintln(os.Stderr)
+			os.Exit(130)
+		case <-done:
+		}
+	}()
+
+	fmt.Fprintf(os.Stderr, "Password for %s: ", user)
+	password, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	return string(password), err
 }
 
 func useColor(mode string, out io.Writer) (bool, error) {

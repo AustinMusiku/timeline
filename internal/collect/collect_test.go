@@ -621,11 +621,17 @@ func TestRejectsASequenceItCannotSend(t *testing.T) {
 		{URL: "http://"},
 		{URL: "://"},
 		{Method: "NOT A METHOD", URL: "http://example.com"},
+		{URL: "ftp://me:secret@example.com"},
+		{URL: "http://me:secret@example.com/%zz"},
 	}
 	for _, r := range tests {
 		got, err := Run(t.Context(), []Request{r}, Options{})
 		if err == nil || got != nil {
 			t.Errorf("%+v: got run %v and error %v, want only an error", r, got, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "secret") {
+			t.Errorf("%+v: error %q gives the password away", r, err)
 		}
 	}
 }

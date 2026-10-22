@@ -78,7 +78,7 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	for i, e := range run.Entries {
 		span = max(span, e.Offset+e.Timings.Total())
 		seqW = max(seqW, len(strconv.Itoa(e.Seq+1)))
-		labels[i] = e.Request.URL
+		labels[i] = redactURL(e.Request.URL)
 		if e.Request.Method != http.MethodGet {
 			labels[i] = e.Request.Method + " " + labels[i]
 		}

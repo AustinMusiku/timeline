@@ -188,13 +188,23 @@ func redirect(req *http.Request, resp *record.Response) *http.Request {
 func newRequest(r Request) (*http.Request, error) {
 	req, err := http.NewRequest(r.Method, r.URL, nil)
 	if err != nil {
+		// A parse error quotes the URL, password and all.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return nil, err
 	}
 	if (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
-		return nil, fmt.Errorf("%q is not an http or https URL", r.URL)
+		return nil, fmt.Errorf("%q is not an http or https URL", req.URL.Redacted())
 	}
 	if r.Header != nil {
 		req.Header = r.Header.Clone()
+	}
+	// The client ignores a Host header and sends req.Host.
+	if host := req.Header.Get("Host"); host != "" {
+		req.Host = host
+		req.Header.Del("Host")
 	}
 	// The transport no longer offers gzip itself.
 	if req.Header.Get("Accept-Encoding") == "" {
@@ -218,7 +228,7 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 	e := record.Entry{
 		Started: m.start,
 		Offset:  m.start.Sub(origin),
-		Request: record.Request{Method: req.Method, URL: req.URL.String()},
+		Request: record.Request{Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone()},
 	}
 
 	resp, err := client.Do(req)

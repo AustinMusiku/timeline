@@ -3,9 +3,12 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -18,7 +21,11 @@ func execute(t *testing.T, args ...string) (string, error) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // keep the user's own config out of it
 
 	reset := func(f *pflag.Flag) {
-		f.Value.Set(f.DefValue)
+		if s, ok := f.Value.(pflag.SliceValue); ok {
+			s.Replace(nil)
+		} else {
+			f.Value.Set(f.DefValue)
+		}
 		f.Changed = false
 	}
 	rootCmd.PersistentFlags().VisitAll(reset)
@@ -209,11 +216,139 @@ func TestRunJSONMarksEachHop(t *testing.T) {
 	}
 }
 
+func TestRunSendsHeaders(t *testing.T) {
+	var got []http.Header
+	var hosts []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header)
+		hosts = append(hosts, r.Host)
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "-H", "X-Test: a, b", "--header", "x-test:c", "-H", "Host: example.com", srv.URL, srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if len(got) != 2 {
+		t.Fatalf("server saw %d requests, want 2", len(got))
+	}
+	for i, h := range got {
+		if v := h.Values("X-Test"); len(v) != 2 || v[0] != "a, b" || v[1] != "c" {
+			t.Errorf("request %d had X-Test %q, want \"a, b\" and \"c\"", i, v)
+		}
+		if hosts[i] != "example.com" {
+			t.Errorf("request %d was for host %q, want example.com", i, hosts[i])
+		}
+	}
+}
+
+func TestRunSendsTheMethod(t *testing.T) {
+	var methods []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/done", http.StatusSeeOther)
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "-X", "POST", srv.URL, srv.URL+"/other")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	// A 303 turns the POST into a GET.
+	if want := []string{"POST", "GET", "POST"}; !slices.Equal(methods, want) {
+		t.Errorf("server saw %v, want %v", methods, want)
+	}
+	if !strings.Contains(out, " 200  #1  POST http://") {
+		t.Errorf("the method is not drawn\n%s", out)
+	}
+}
+
+func TestRunSendsBasicAuth(t *testing.T) {
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auths = append(auths, r.Header.Get("Authorization"))
+		if user, pass, ok := r.BasicAuth(); ok && (user != "me" || pass != "se:cret") {
+			t.Errorf("server saw %q and %q, want me and se:cret", user, pass)
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "-u", "me:se:cret", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "se:cret") || !strings.Contains(out, `"Authorization":["Basic xxxxx"]`) {
+		t.Errorf("the JSON does not hide the credentials\n%s", out)
+	}
+
+	out, err = execute(t, "run", "-u", "me:se:cret", "-H", "Authorization: Bearer x", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if len(auths) != 2 || !strings.HasPrefix(auths[0], "Basic ") || auths[1] != "Bearer x" {
+		t.Errorf("server saw Authorization %q, want basic auth then the -H value", auths)
+	}
+}
+
+func TestRunAsksForAMissingPassword(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, pass, _ := r.BasicAuth(); user != "me" || pass != "secret" {
+			t.Errorf("server saw %q and %q, want me and secret", user, pass)
+		}
+	}))
+	defer srv.Close()
+
+	ask := askPassword
+	defer func() { askPassword = ask }()
+	var asked []string
+	askPassword = func(user string) (string, error) {
+		asked = append(asked, user)
+		return "secret", nil
+	}
+
+	if out, err := execute(t, "run", "-u", "me", srv.URL); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if out, err := execute(t, "run", "-u", "me:secret", srv.URL); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if !slices.Equal(asked, []string{"me"}) {
+		t.Errorf("asked for a password for %q, want only for me without one", asked)
+	}
+
+	askPassword = func(string) (string, error) { return "", errors.New("no terminal") }
+	if out, err := execute(t, "run", "-u", "me", srv.URL); err == nil || out != "" {
+		t.Errorf("error %v, output %q; want an error and no output", err, out)
+	}
+}
+
+func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "-H", "Authorization: Bearer secret", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "secret") {
+		t.Errorf("the token is in the output\n%s", out)
+	}
+	h, _ := lines(t, out)[0]["request_headers"].(map[string]any)
+	want := map[string]any{"Authorization": []any{"Bearer xxxxx"}, "Accept-Encoding": []any{"gzip"}}
+	if !reflect.DeepEqual(h, want) {
+		t.Errorf("request_headers is %v, want %v", h, want)
+	}
+}
+
 func TestRunRejectsBadInput(t *testing.T) {
 	tests := [][]string{
 		{"run"},
 		{"run", "example.com"},
 		{"run", "--color", "sometimes", "http://example.com"},
+		{"run", "-H", "X-Test", "http://example.com"},
+		{"run", "-X", "NOT A METHOD", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {
