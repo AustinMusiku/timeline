@@ -2,6 +2,20 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.5.0] - 2026-10-23
+
+### Features
+
+- Add -H/--header to run
+- Add request_headers to the JSON
+- Add -X/--method to run
+- Add -u/--user for basic auth
+- Prompt for the password when -u has none
+
+### Fixes
+
+- Hide passwords in URLs
+
 ## [0.4.0] - 2026-10-14
 
 ### Features
