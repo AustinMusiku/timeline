@@ -28,10 +28,17 @@ var runCmd = &cobra.Command{
 	Long: `Run sends a GET to each URL in turn and draws every request on one shared
 time axis, with each bar split into the phases the request went through.
 
---method, --header and --user apply to every request. --user with no password
-asks for one on the terminal. An Authorization from --header wins over --user.
---header and --user are read from the command line only, never from the
-environment or the config file.
+--method, --header, --user and the body flags apply to every request. --user
+with no password asks for one on the terminal. An Authorization from --header
+wins over --user. --header, --user and the body flags are read from the command
+line only, never from the environment or the config file.
+
+The body flags work as in curl. A body makes the request a POST unless
+--method says otherwise, and a form unless --header gives a Content-Type.
+--data @file reads a file without its line breaks, and @- reads stdin.
+--data-binary @file keeps the line breaks, and --data-raw reads no file.
+Several body flags are joined with &, in the order given. A 307 or 308 redirect
+sends the body on; a 301, 302 or 303 turns the request into a GET without it.
 
 Connections stay open for the length of the run, so repeating the sequence
 with --repeat shows a cold first round followed by warm ones. Each row is
@@ -54,7 +61,8 @@ none.
 
 request_headers maps each header timeline set to its values. Credentials are
 hidden: an Authorization keeps its scheme and a Cookie its names. A password in
-url or location shows as xxxxx.
+url or location shows as xxxxx. request_body_bytes is the size of the body
+sent; the body itself is never written out.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
@@ -67,6 +75,7 @@ retried.`,
   timeline run --concurrency 4 https://example.com/a https://example.com/b
   timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
   timeline run -X POST -u me https://api.example.com/login
+  timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,
