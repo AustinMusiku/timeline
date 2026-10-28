@@ -15,6 +15,7 @@ import (
 type Defaults struct {
 	Method string
 	Header http.Header
+	Body   []byte
 }
 
 // FromURLs returns a request for each URL, with d applied.
@@ -29,6 +30,9 @@ func FromURLs(urls []string, d Defaults) []collect.Request {
 func (d Defaults) apply(r collect.Request) collect.Request {
 	if r.Method == "" {
 		r.Method = d.Method
+	}
+	if r.Body == nil {
+		r.Body = d.Body
 	}
 	for name, values := range d.Header {
 		if _, ok := r.Header[name]; ok {

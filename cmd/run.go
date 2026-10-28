@@ -87,11 +87,17 @@ func init() {
 	// These can carry credentials, so they come from the command line only.
 	f.StringArrayP("header", "H", nil, "header to send with every request, as 'Name: value'")
 	f.StringP("user", "u", "", "user:password for basic auth on every request")
+	f.VarP(dataFlag{&dataParts}, "data", "d", "body for every request, @file or @- for stdin; several are joined with &")
 }
 
 // defaults reads the flags that apply to every request.
-func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
+func defaults(f *pflag.FlagSet, stdin io.Reader) (sequence.Defaults, error) {
 	d := sequence.Defaults{Method: viper.GetString("method")}
+	b, err := body(dataParts, stdin)
+	if err != nil {
+		return d, err
+	}
+
 	lines, err := f.GetStringArray("header")
 	if err != nil {
 		return d, err
@@ -105,6 +111,20 @@ func defaults(f *pflag.FlagSet) (sequence.Defaults, error) {
 			d.Header = http.Header{}
 		}
 		d.Header.Add(name, value)
+	}
+
+	// As in curl, -d makes a form POST unless told otherwise.
+	if b != nil {
+		d.Body = b
+		if d.Method == "" {
+			d.Method = http.MethodPost
+		}
+		if d.Header.Get("Content-Type") == "" {
+			if d.Header == nil {
+				d.Header = http.Header{}
+			}
+			d.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
 	}
 
 	userpass, err := f.GetString("user")
@@ -134,7 +154,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	d, err := defaults(cmd.Flags())
+	d, err := defaults(cmd.Flags(), cmd.InOrStdin())
 	if err != nil {
 		return err
 	}

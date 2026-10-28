@@ -50,6 +50,14 @@ func TestDefaultsGiveWayToTheRequest(t *testing.T) {
 		t.Errorf("method %q, want the default POST", got.Method)
 	}
 
+	d.Body = []byte("default")
+	if got := d.apply(collect.Request{URL: "u", Body: []byte{}}); got.Body == nil || len(got.Body) != 0 {
+		t.Errorf("body %q, want the request's own empty one", got.Body)
+	}
+	if got := d.apply(collect.Request{URL: "u"}); string(got.Body) != "default" {
+		t.Errorf("body %q, want the default", got.Body)
+	}
+
 	reqs := FromURLs([]string{"a", "b"}, d)
 	reqs[0].Header.Add("X-Two", "3")
 	if !reflect.DeepEqual(reqs[1].Header, d.Header) || len(d.Header["X-Two"]) != 2 {
