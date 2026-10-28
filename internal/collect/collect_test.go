@@ -1,10 +1,12 @@
 package collect
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"net/http/httptrace"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -632,6 +635,126 @@ func TestRejectsASequenceItCannotSend(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "secret") {
 			t.Errorf("%+v: error %q gives the password away", r, err)
+		}
+	}
+}
+
+func TestBodyIsSentWithEverySend(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, fmt.Sprintf("%s %d %s", r.Method, r.ContentLength, b))
+		mu.Unlock()
+	}))
+	defer srv.Close()
+
+	req := Request{Method: "POST", URL: srv.URL, Body: []byte("a=1")}
+	got, err := run(t.Context(), transport(srv), []Request{req, req}, Options{Repeat: 2, Concurrency: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range got.Entries {
+		if e.Error != "" {
+			t.Fatalf("request failed: %s", e.Error)
+		}
+	}
+	want := []string{"POST 3 a=1", "POST 3 a=1", "POST 3 a=1", "POST 3 a=1"}
+	if !slices.Equal(bodies, want) {
+		t.Errorf("server saw %q, want %q", bodies, want)
+	}
+}
+
+func TestRedirectsKeepOrDropTheBody(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/303":
+			http.Redirect(w, r, "/echo", http.StatusSeeOther)
+		case "/307":
+			http.Redirect(w, r, "/echo", http.StatusTemporaryRedirect)
+		case "/echo":
+			b, _ := io.ReadAll(r.Body)
+			got = append(got, fmt.Sprintf("%s %q %q", r.Method, r.Header.Get("Content-Type"), b))
+		}
+	}))
+	defer srv.Close()
+
+	header := http.Header{"Content-Type": {"text/plain"}}
+	reqs := []Request{
+		{Method: "POST", URL: srv.URL + "/303", Header: header, Body: []byte("hi")},
+		{Method: "POST", URL: srv.URL + "/307", Header: header, Body: []byte("hi")},
+	}
+	res, err := run(t.Context(), transport(srv), reqs, Options{MaxRedirects: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`GET "" ""`, `POST "text/plain" "hi"`}
+	if !slices.Equal(got, want) {
+		t.Errorf("the hops arrived as %q, want %q", got, want)
+	}
+	var sizes []int64
+	for _, e := range res.Entries {
+		sizes = append(sizes, e.Request.BodySize)
+	}
+	if want := []int64{2, 0, 2, 2}; !slices.Equal(sizes, want) {
+		t.Errorf("recorded body sizes %v, want %v", sizes, want)
+	}
+}
+
+// A connection the server drops after reading a request is retried on a new
+// one, which needs the body again.
+func TestRetrySendsTheBodyAgain(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	bodies := make(chan string, 3)
+	go func() {
+		for n := 0; ; n++ {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				rd := bufio.NewReader(conn)
+				for i := 0; ; i++ {
+					req, err := http.ReadRequest(rd)
+					if err != nil {
+						return
+					}
+					b, _ := io.ReadAll(req.Body)
+					bodies <- string(b)
+					// The first connection drops the second request it gets.
+					if n == 0 && i == 1 {
+						return
+					}
+					io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+				}
+			}()
+		}
+	}()
+
+	// The key tells the client it may send the POST again.
+	req := Request{
+		Method: "POST", URL: "http://" + ln.Addr().String(),
+		Header: http.Header{"Idempotency-Key": {"1"}}, Body: []byte("again"),
+	}
+	got, err := run(t.Context(), http.DefaultTransport.(*http.Transport).Clone(), []Request{req, req}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := got.Entries[1]; e.Error != "" || e.Attempts != 2 {
+		t.Fatalf("second request: error %q after %d attempts, want success after 2", e.Error, e.Attempts)
+	}
+	close(bodies)
+	for b := range bodies {
+		if b != "again" {
+			t.Errorf("server read the body %q, want again", b)
 		}
 	}
 }

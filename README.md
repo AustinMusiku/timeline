@@ -32,9 +32,12 @@ Each URL gets a GET, one after the other, in the order given.
 | `-c`, `--concurrency` | `1`     | Requests to keep in flight at once                   |
 | `--timeout`           | `30s`   | Time limit for each request, `0` for none            |
 | `--max-redirects`     | `10`    | Redirects to follow from each request, `0` for none  |
-| `-X`, `--method`      | `GET`   | Method for every request                             |
+| `-X`, `--method`      | `GET`   | Method for every request, POST when there is a body  |
 | `-H`, `--header`      |         | `Name: value` to send with every request, repeatable |
 | `-u`, `--user`        |         | `user:password` for basic auth on every request      |
+| `-d`, `--data`        |         | Body for every request, `@file` or `@-` for stdin    |
+| `--data-raw`          |         | Like `-d`, but a leading `@` is sent as typed        |
+| `--data-binary`       |         | Like `-d`, but `@file` keeps its line breaks         |
 | `--json`              | off     | One line of JSON per request instead of drawing      |
 | `--color`             | `auto`  | `auto`, `always` or `never`                          |
 
@@ -54,6 +57,30 @@ another host when a redirect leads there.
 Output never shows credentials: a password in a URL becomes `xxxxx`, an
 `Authorization` keeps only its scheme (`Bearer xxxxx`), and a `Cookie` only its
 names (`session=xxxxx`).
+
+### Request bodies
+
+```sh
+timeline run -d 'user=me&remember=1' https://example.com/login
+timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
+```
+
+The body flags work as in curl, so a command from your browser's "Copy as
+cURL" runs with `curl` swapped for `timeline run`:
+
+- A body makes the request a POST, unless `-X` says otherwise, and sends
+  `Content-Type: application/x-www-form-urlencoded`, unless `-H` gives one.
+- `-d @file` reads a file and drops its line breaks, which suits form data.
+  `--data-binary @file` sends the file exactly as it is, and `--data-raw`
+  never reads a file.
+- Several body flags are joined with `&`, in the order given.
+
+Each repeat sends the same bytes. A 307 or 308 redirect sends them on again,
+and a 301, 302 or 303 turns the request into a GET with no body.
+
+Writing the body is part of send. A small body is handed to the kernel in one
+go, so send stays short and its trip to the server shows up in wait; send
+grows only once the body outgrows the socket's buffer.
 
 ## Reading the waterfall
 
@@ -83,7 +110,7 @@ started and is made of these phases, in order:
 | dns     | `d`    | cyan    | Looking up the host                              |
 | connect | `c`    | yellow  | The TCP handshake                                |
 | tls     | `t`    | magenta | The TLS handshake                                |
-| send    | `s`    | default | Writing the request                              |
+| send    | `s`    | default | Writing the request and its body                 |
 | wait    | `w`    | green   | Request written, waiting for the first byte back |
 | receive | `r`    | blue    | First byte to the end of the body                |
 
@@ -132,6 +159,7 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
   "method":"GET",
   "url":"https://go.dev",
   "request_headers":{"Accept-Encoding":["gzip"]},
+  "request_body_bytes":0,
   "status":200,
   "proto":"HTTP/2.0",
   "body_bytes":12085,
@@ -165,7 +193,8 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
 Every key is always present. The hops of a redirect share a `seq`, and `hop`
 counts them from 0 for the URL that was given. `request_headers` are the
 headers timeline set, with credentials hidden; Go's client adds `Host`,
-`User-Agent` and the like as it sends. `location` is the response's
+`User-Agent` and the like as it sends. `request_body_bytes` is the size of the
+body sent; the body itself is never written out. `location` is the response's
 `Location` header, or `null` if it had none. `conn_id` is the number the
 waterfall shows, and 0 for a request that never got a connection.
 `resolved_ips` and `dial_attempts` describe the request's own dial, so they are
@@ -188,8 +217,9 @@ timeout: 5s
 color: never
 ```
 
-`--config` points at a different file. `NO_COLOR` is honoured. `-H` and `-u`
-can carry credentials, so they are read from the command line only.
+`--config` points at a different file. `NO_COLOR` is honoured. `-H`, `-u` and
+the body flags can carry credentials, so they are read from the command line
+only.
 
 ## Exit status
 

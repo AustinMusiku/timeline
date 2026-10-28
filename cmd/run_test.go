@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -342,6 +346,53 @@ func TestRunJSONShowsRequestHeadersWithoutSecrets(t *testing.T) {
 	}
 }
 
+// echo records each request it gets as its method, Content-Type and body.
+func echo(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, fmt.Sprintf("%s %s %s", r.Method, r.Header.Get("Content-Type"), b))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &got
+}
+
+func TestRunSendsData(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "body")
+	if err := os.WriteFile(file, []byte("c=3\r\n&d=4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootCmd.SetIn(strings.NewReader("e=5\n"))
+	defer rootCmd.SetIn(nil)
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-d", "a=1", "-d", "b=2"}, "POST application/x-www-form-urlencoded a=1&b=2"},
+		{[]string{"-d", "@" + file, "--data", "@-"}, "POST application/x-www-form-urlencoded c=3&d=4&e=5"},
+		{[]string{"-X", "PUT", "-H", "Content-Type: application/json", "-d", `{"a":1}`}, `PUT application/json {"a":1}`},
+		{[]string{"-d", ""}, "POST application/x-www-form-urlencoded "},
+		{[]string{"--data-raw", "@" + file}, "POST application/x-www-form-urlencoded @" + file},
+		{[]string{"--data-raw", "a=1", "--data-binary", "@" + file, "-d", "b=2"}, "POST application/x-www-form-urlencoded a=1&c=3\r\n&d=4\n&b=2"},
+	}
+	for _, tc := range tests {
+		srv, got := echo(t)
+		out, err := execute(t, append(append([]string{"run", "--json"}, tc.args...), srv.URL)...)
+		if err != nil {
+			t.Fatalf("%v: run failed: %v\n%s", tc.args, err, out)
+		}
+		if len(*got) != 1 || (*got)[0] != tc.want {
+			t.Errorf("%v: server saw %q, want %q", tc.args, *got, tc.want)
+		}
+		size := float64(len(tc.want) - strings.LastIndex(tc.want, " ") - 1)
+		if l := lines(t, out)[0]; l["request_body_bytes"] != size {
+			t.Errorf("%v: request_body_bytes is %v, want %v", tc.args, l["request_body_bytes"], size)
+		}
+	}
+}
+
 func TestRunRejectsBadInput(t *testing.T) {
 	tests := [][]string{
 		{"run"},
@@ -349,6 +400,7 @@ func TestRunRejectsBadInput(t *testing.T) {
 		{"run", "--color", "sometimes", "http://example.com"},
 		{"run", "-H", "X-Test", "http://example.com"},
 		{"run", "-X", "NOT A METHOD", "http://example.com"},
+		{"run", "-d", "@no/such/file", "http://example.com"},
 	}
 	for _, args := range tests {
 		if out, err := execute(t, args...); err == nil || out != "" {
