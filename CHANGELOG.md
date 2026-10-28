@@ -2,6 +2,15 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.6.0] - 2026-10-28
+
+### Features
+
+- Send request bodies from the collector
+- Add request_body_bytes to the JSON
+- Add -d/--data to run
+- Add --data-raw and --data-binary
+
 ## [0.5.0] - 2026-10-23
 
 ### Features
