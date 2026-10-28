@@ -751,10 +751,15 @@ func TestRetrySendsTheBodyAgain(t *testing.T) {
 	if e := got.Entries[1]; e.Error != "" || e.Attempts != 2 {
 		t.Fatalf("second request: error %q after %d attempts, want success after 2", e.Error, e.Attempts)
 	}
-	close(bodies)
-	for b := range bodies {
-		if b != "again" {
-			t.Errorf("server read the body %q, want again", b)
+	// Two sends and the retry. The channel stays open for the server's goroutines.
+	for range 3 {
+		select {
+		case b := <-bodies:
+			if b != "again" {
+				t.Errorf("server read the body %q, want again", b)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("server read fewer than 3 bodies")
 		}
 	}
 }
