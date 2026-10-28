@@ -2,6 +2,7 @@
 package collect
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -23,6 +24,7 @@ type Request struct {
 	Method string // GET when empty
 	URL    string
 	Header http.Header
+	Body   []byte // nil for none
 }
 
 type Options struct {
@@ -153,13 +155,14 @@ func redirect(req *http.Request, resp *record.Response) *http.Request {
 	if resp == nil {
 		return nil
 	}
-	method := req.Method
+	method, keepBody := req.Method, false
 	switch resp.Status {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther:
 		if method != http.MethodHead {
 			method = http.MethodGet
 		}
 	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		keepBody = true
 	default:
 		return nil
 	}
@@ -176,6 +179,13 @@ func redirect(req *http.Request, resp *record.Response) *http.Request {
 	if err != nil {
 		return nil
 	}
+	switch {
+	case keepBody:
+		next.GetBody, next.ContentLength = req.GetBody, req.ContentLength
+	case req.GetBody != nil:
+		// A body left behind takes its type with it.
+		next.Header.Del("Content-Type")
+	}
 	// Credentials stay with the host they were given for.
 	if next.URL.Host != req.URL.Host {
 		for _, h := range []string{"Authorization", "Cookie", "Proxy-Authorization"} {
@@ -186,7 +196,11 @@ func redirect(req *http.Request, resp *record.Response) *http.Request {
 }
 
 func newRequest(r Request) (*http.Request, error) {
-	req, err := http.NewRequest(r.Method, r.URL, nil)
+	var body io.Reader
+	if r.Body != nil {
+		body = bytes.NewReader(r.Body)
+	}
+	req, err := http.NewRequest(r.Method, r.URL, body)
 	if err != nil {
 		// A parse error quotes the URL, password and all.
 		var uerr *url.Error
@@ -223,6 +237,10 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 
 	m := marks{seen: seen}
 	req := tmpl.Clone(httptrace.WithClientTrace(ctx, m.trace()))
+	// Clones share a body, so each send reads its own copy.
+	if tmpl.GetBody != nil {
+		req.Body, _ = tmpl.GetBody()
+	}
 
 	m.start = time.Now()
 	e := record.Entry{
