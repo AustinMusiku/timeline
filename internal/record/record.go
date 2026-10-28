@@ -50,6 +50,8 @@ type Request struct {
 	// Header is what the request was given. The client adds Host,
 	// User-Agent and the like as it sends, and those are not here.
 	Header http.Header
+	// BodySize counts the body bytes sent. The body itself is not kept.
+	BodySize int64
 }
 
 type Response struct {

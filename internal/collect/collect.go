@@ -246,7 +246,10 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 	e := record.Entry{
 		Started: m.start,
 		Offset:  m.start.Sub(origin),
-		Request: record.Request{Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone()},
+		Request: record.Request{
+			Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone(),
+			BodySize: req.ContentLength,
+		},
 	}
 
 	resp, err := client.Do(req)

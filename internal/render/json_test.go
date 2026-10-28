@@ -21,8 +21,9 @@ func TestJSON(t *testing.T) {
 			e: record.Entry{
 				Seq: 1, Round: 2, Started: started, Offset: 650*ms + 4*time.Microsecond,
 				Request: record.Request{
-					Method: "GET", URL: "https://example.com/?a=1&b=2",
-					Header: http.Header{"Authorization": {"Bearer secret"}, "Accept-Encoding": {"gzip"}},
+					Method: "POST", URL: "https://example.com/?a=1&b=2",
+					Header:   http.Header{"Authorization": {"Bearer secret"}, "Accept-Encoding": {"gzip"}},
+					BodySize: 17,
 				},
 				Response: &record.Response{Status: 200, Proto: "HTTP/2.0", BodySize: 1256},
 				Timings:  record.Timings{Blocked: 112 * time.Microsecond, DNS: 12 * ms, Connect: 18 * ms, TLS: 41 * ms, Send: 83400 * time.Nanosecond, Wait: 96 * ms, Receive: 1200 * time.Microsecond},
@@ -34,7 +35,7 @@ func TestJSON(t *testing.T) {
 				Attempts: 1,
 			},
 			want: `{"seq":1,"round":2,"hop":0,"started_at":"2026-10-12T06:14:03.218417Z","offset_ms":650.004,` +
-				`"method":"GET","url":"https://example.com/?a=1&b=2","request_headers":{"Accept-Encoding":["gzip"],"Authorization":["Bearer xxxxx"]},"status":200,"proto":"HTTP/2.0","body_bytes":1256,"location":null,` +
+				`"method":"POST","url":"https://example.com/?a=1&b=2","request_headers":{"Accept-Encoding":["gzip"],"Authorization":["Bearer xxxxx"]},"request_body_bytes":17,"status":200,"proto":"HTTP/2.0","body_bytes":1256,"location":null,` +
 				`"conn_id":1,"reused":false,"remote_addr":"93.184.216.34:443","local_addr":"192.168.1.20:51844",` +
 				`"tls_version":"TLS 1.3","tls_resumed":false,"alpn":"h2",` +
 				`"attempts":1,"resolved_ips":["93.184.216.34","2606:2800:220:1::1"],"dial_attempts":1,` +
@@ -51,7 +52,7 @@ func TestJSON(t *testing.T) {
 				Error:    "dial tcp: lookup nope.invalid: no such host",
 			},
 			want: `{"seq":0,"round":0,"hop":0,"started_at":"2026-10-12T06:14:03.218417Z","offset_ms":0,` +
-				`"method":"GET","url":"https://nope.invalid/","request_headers":{},"status":0,"proto":"","body_bytes":0,"location":null,` +
+				`"method":"GET","url":"https://nope.invalid/","request_headers":{},"request_body_bytes":0,"status":0,"proto":"","body_bytes":0,"location":null,` +
 				`"conn_id":0,"reused":false,"remote_addr":"","local_addr":"",` +
 				`"tls_version":"","tls_resumed":false,"alpn":"",` +
 				`"attempts":1,"resolved_ips":[],"dial_attempts":0,` +

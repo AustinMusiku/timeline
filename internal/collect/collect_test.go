@@ -686,12 +686,20 @@ func TestRedirectsKeepOrDropTheBody(t *testing.T) {
 		{Method: "POST", URL: srv.URL + "/303", Header: header, Body: []byte("hi")},
 		{Method: "POST", URL: srv.URL + "/307", Header: header, Body: []byte("hi")},
 	}
-	if _, err := run(t.Context(), transport(srv), reqs, Options{MaxRedirects: 1}); err != nil {
+	res, err := run(t.Context(), transport(srv), reqs, Options{MaxRedirects: 1})
+	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{`GET "" ""`, `POST "text/plain" "hi"`}
 	if !slices.Equal(got, want) {
 		t.Errorf("the hops arrived as %q, want %q", got, want)
+	}
+	var sizes []int64
+	for _, e := range res.Entries {
+		sizes = append(sizes, e.Request.BodySize)
+	}
+	if want := []int64{2, 0, 2, 2}; !slices.Equal(sizes, want) {
+		t.Errorf("recorded body sizes %v, want %v", sizes, want)
 	}
 }
 
