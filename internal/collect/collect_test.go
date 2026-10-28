@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -761,5 +763,36 @@ func TestRetrySendsTheBodyAgain(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("server read fewer than 3 bodies")
 		}
+	}
+}
+
+func TestTLSConfigIsUsedAndLeftAlone(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(hello))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	cfg := &tls.Config{RootCAs: roots}
+
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	got, err := run(t.Context(), tr, []Request{{URL: srv.URL}}, Options{TLS: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := got.Entries[0]
+	if e.Error != "" {
+		t.Fatalf("request failed: %s", e.Error)
+	}
+	// A TLS config of its own must not cost the run HTTP/2.
+	if e.Response.Proto != "HTTP/2.0" || e.Conn.ALPN != "h2" {
+		t.Errorf("got %s with ALPN %q, want HTTP/2.0 and h2", e.Response.Proto, e.Conn.ALPN)
+	}
+	if tr.TLSClientConfig.ClientSessionCache == nil {
+		t.Error("the run has no TLS session cache")
+	}
+	if cfg.ClientSessionCache != nil {
+		t.Error("the run changed the config it was given")
 	}
 }
