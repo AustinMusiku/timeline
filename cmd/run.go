@@ -99,6 +99,9 @@ func init() {
 	f.VarP(dataFlag{&dataParts, data}, "data", "d", "body for every request, @file or @- for stdin; several are joined with &")
 	f.Var(dataFlag{&dataParts, dataRaw}, "data-raw", "like --data, but sent as typed even when it starts with @")
 	f.Var(dataFlag{&dataParts, dataBinary}, "data-binary", "like --data, but @file keeps its line breaks")
+
+	// Command line only, so no config file can turn certificate checks off.
+	f.BoolP("insecure", "k", false, "skip checking the server's certificate")
 }
 
 // defaults reads the flags that apply to every request.
@@ -171,6 +174,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	}
 	reqs := sequence.FromURLs(args, d)
 	repeat := max(viper.GetInt("repeat"), 1)
+	tlsConf, err := tlsConfig(cmd.Flags())
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -180,6 +187,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Concurrency:  viper.GetInt("concurrency"),
 		Timeout:      viper.GetDuration("timeout"),
 		MaxRedirects: viper.GetInt("max-redirects"),
+		TLS:          tlsConf,
 	}
 	asJSON := viper.GetBool("json")
 	var writeErr error

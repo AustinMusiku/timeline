@@ -408,3 +408,16 @@ func TestRunRejectsBadInput(t *testing.T) {
 		}
 	}
 }
+
+func TestRunInsecureSkipsTheCertificateCheck(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", srv.URL)
+	if err == nil || !strings.Contains(out, "certificate") {
+		t.Errorf("without -k: error %v and output\n%s\nwant a certificate failure", err, out)
+	}
+	if out, err := execute(t, "run", "-k", srv.URL); err != nil {
+		t.Errorf("with -k: %v\n%s", err, out)
+	}
+}
