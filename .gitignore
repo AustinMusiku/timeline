@@ -5,3 +5,6 @@
 *.out
 .envrc
 .claude/settings.local.json
+
+
+scratch.*
