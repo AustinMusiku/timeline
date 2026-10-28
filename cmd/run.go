@@ -87,7 +87,9 @@ func init() {
 	// These can carry credentials, so they come from the command line only.
 	f.StringArrayP("header", "H", nil, "header to send with every request, as 'Name: value'")
 	f.StringP("user", "u", "", "user:password for basic auth on every request")
-	f.VarP(dataFlag{&dataParts}, "data", "d", "body for every request, @file or @- for stdin; several are joined with &")
+	f.VarP(dataFlag{&dataParts, data}, "data", "d", "body for every request, @file or @- for stdin; several are joined with &")
+	f.Var(dataFlag{&dataParts, dataRaw}, "data-raw", "like --data, but sent as typed even when it starts with @")
+	f.Var(dataFlag{&dataParts, dataBinary}, "data-binary", "like --data, but @file keeps its line breaks")
 }
 
 // defaults reads the flags that apply to every request.

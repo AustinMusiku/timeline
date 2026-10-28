@@ -374,6 +374,8 @@ func TestRunSendsData(t *testing.T) {
 		{[]string{"-d", "@" + file, "--data", "@-"}, "POST application/x-www-form-urlencoded c=3&d=4&e=5"},
 		{[]string{"-X", "PUT", "-H", "Content-Type: application/json", "-d", `{"a":1}`}, `PUT application/json {"a":1}`},
 		{[]string{"-d", ""}, "POST application/x-www-form-urlencoded "},
+		{[]string{"--data-raw", "@" + file}, "POST application/x-www-form-urlencoded @" + file},
+		{[]string{"--data-raw", "a=1", "--data-binary", "@" + file, "-d", "b=2"}, "POST application/x-www-form-urlencoded a=1&c=3\r\n&d=4\n&b=2"},
 	}
 	for _, tc := range tests {
 		srv, got := echo(t)
