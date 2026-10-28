@@ -196,13 +196,6 @@ can carry credentials, so they are read from the command line only.
 `timeline` exits 1 when any request got no response or the run was interrupted,
 and 0 otherwise. Ctrl-C still draws what was collected.
 
-## Not yet
-
-- Request bodies
-- Sequence files, with a method, headers and body for each step
-- HAR files as input
-- Windows builds
-
 ## Development
 
 ```sh
