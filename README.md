@@ -38,6 +38,10 @@ Each URL gets a GET, one after the other, in the order given.
 | `-d`, `--data`        |         | Body for every request, `@file` or `@-` for stdin    |
 | `--data-raw`          |         | Like `-d`, but a leading `@` is sent as typed        |
 | `--data-binary`       |         | Like `-d`, but `@file` keeps its line breaks         |
+| `-k`, `--insecure`    | off     | Skip checking the server's certificate               |
+| `--cacert`            |         | PEM file of CA certificates to trust                 |
+| `--cert`              |         | PEM file of a client certificate                     |
+| `--key`               |         | PEM file of the client certificate's key             |
 | `--json`              | off     | One line of JSON per request instead of drawing      |
 | `--color`             | `auto`  | `auto`, `always` or `never`                          |
 
@@ -81,6 +85,20 @@ and a 301, 302 or 303 turns the request into a GET with no body.
 Writing the body is part of send. A small body is handed to the kernel in one
 go, so send stays short and its trip to the server shows up in wait; send
 grows only once the body outgrows the socket's buffer.
+
+### TLS
+
+```sh
+timeline run --cacert internal-ca.pem https://api.internal.example.com/health
+timeline run --cert client.pem --key client-key.pem https://mtls.example.com/
+timeline run -k https://localhost:8443/
+```
+
+`--cacert` trusts the certificates in a PEM file in place of the system's, for
+hosts signed by a private CA. `--cert` sends a client certificate to a server
+that asks for one, with its key from `--key` or, without it, from the same
+file. A key protected by a passphrase is not supported. `-k` skips checking
+the server's certificate altogether. The TLS timings are the same either way.
 
 ## Reading the waterfall
 
@@ -219,7 +237,8 @@ color: never
 
 `--config` points at a different file. `NO_COLOR` is honoured. `-H`, `-u` and
 the body flags can carry credentials, so they are read from the command line
-only.
+only. So is `-k`, so that no config file can turn certificate checks off.
+`--cacert`, `--cert` and `--key` are paths, and can be set in either place.
 
 ## Exit status
 

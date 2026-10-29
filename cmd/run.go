@@ -40,6 +40,11 @@ The body flags work as in curl. A body makes the request a POST unless
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
 
+--cacert trusts the certificates in a PEM file in place of the system's.
+--cert sends a client certificate, with its key from --key or from the same
+file. --insecure skips checking the server's certificate, and is read from the
+command line only.
+
 Connections stay open for the length of the run, so repeating the sequence
 with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
@@ -76,6 +81,7 @@ retried.`,
   timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
   timeline run -X POST -u me https://api.example.com/login
   timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
+  timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,
