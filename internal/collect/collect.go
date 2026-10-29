@@ -37,6 +37,8 @@ type Options struct {
 	// MaxRedirects is how many redirects to follow from each request. Zero
 	// follows none.
 	MaxRedirects int
+	// TLS, if set, is copied for every connection the run makes.
+	TLS *tls.Config
 	// OnEntry, if set, is called with each entry as its request finishes,
 	// one call at a time.
 	OnEntry func(record.Entry)
@@ -67,6 +69,9 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 	// Keep bodies as sent, so sizes and Content-Encoding are the real ones.
 	tr.DisableCompression = true
 
+	if opts.TLS != nil {
+		tr.TLSClientConfig = opts.TLS.Clone()
+	}
 	// Let a host that is dialled again resume its TLS session.
 	if tr.TLSClientConfig == nil {
 		tr.TLSClientConfig = &tls.Config{}

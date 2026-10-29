@@ -40,6 +40,11 @@ The body flags work as in curl. A body makes the request a POST unless
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
 
+--cacert trusts the certificates in a PEM file in place of the system's.
+--cert sends a client certificate, with its key from --key or from the same
+file. --insecure skips checking the server's certificate, and is read from the
+command line only.
+
 Connections stay open for the length of the run, so repeating the sequence
 with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
@@ -76,6 +81,7 @@ retried.`,
   timeline run -H "Authorization: Bearer $TOKEN" https://api.example.com/me
   timeline run -X POST -u me https://api.example.com/login
   timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
+  timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runSequence,
@@ -91,6 +97,9 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
+	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
+	f.String("key", "", "PEM file of the client certificate's key")
 	viper.BindPFlags(f)
 
 	// These can carry credentials, so they come from the command line only.
@@ -99,6 +108,9 @@ func init() {
 	f.VarP(dataFlag{&dataParts, data}, "data", "d", "body for every request, @file or @- for stdin; several are joined with &")
 	f.Var(dataFlag{&dataParts, dataRaw}, "data-raw", "like --data, but sent as typed even when it starts with @")
 	f.Var(dataFlag{&dataParts, dataBinary}, "data-binary", "like --data, but @file keeps its line breaks")
+
+	// Command line only, so no config file can turn certificate checks off.
+	f.BoolP("insecure", "k", false, "skip checking the server's certificate")
 }
 
 // defaults reads the flags that apply to every request.
@@ -171,6 +183,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	}
 	reqs := sequence.FromURLs(args, d)
 	repeat := max(viper.GetInt("repeat"), 1)
+	tlsConf, err := tlsConfig(cmd.Flags())
+	if err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -180,6 +196,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Concurrency:  viper.GetInt("concurrency"),
 		Timeout:      viper.GetDuration("timeout"),
 		MaxRedirects: viper.GetInt("max-redirects"),
+		TLS:          tlsConf,
 	}
 	asJSON := viper.GetBool("json")
 	var writeErr error
