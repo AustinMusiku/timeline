@@ -16,6 +16,7 @@ type jsonEntry struct {
 	Seq              int                 `json:"seq"`
 	Round            int                 `json:"round"`
 	Hop              int                 `json:"hop"`
+	Name             string              `json:"name"`
 	StartedAt        string              `json:"started_at"`
 	OffsetMS         float64             `json:"offset_ms"`
 	Method           string              `json:"method"`
@@ -54,6 +55,7 @@ func JSON(w io.Writer, e record.Entry) error {
 		Seq:              e.Seq,
 		Round:            e.Round,
 		Hop:              e.Hop,
+		Name:             e.Request.Name,
 		StartedAt:        e.Started.UTC().Format("2006-01-02T15:04:05.000000Z"),
 		OffsetMS:         millis(e.Offset),
 		Method:           e.Request.Method,
