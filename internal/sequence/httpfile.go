@@ -7,29 +7,39 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/AustinMusiku/timeline/internal/collect"
 )
 
 // ParseHTTP reads a sequence file in the .http format that VS Code's REST
-// Client and JetBrains share. name labels errors, and a body read with
-// "< path" is found relative to dir.
-func ParseHTTP(r io.Reader, name, dir string) ([]collect.Request, error) {
-	p := &parser{name: name, dir: dir}
+// Client and JetBrains share. name labels errors, a body read with "< path"
+// is found relative to dir, and lookup reads the environment.
+func ParseHTTP(r io.Reader, name, dir string, lookup func(string) (string, bool)) ([]collect.Request, error) {
+	var lines []string
 	rd := bufio.NewReader(r)
 	for {
 		line, err := rd.ReadString('\n')
 		if line != "" {
-			p.n++
-			if err := p.line(line); err != nil {
-				return nil, err
-			}
+			lines = append(lines, line)
 		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			return nil, err
+		}
+	}
+
+	p := &parser{name: name, dir: dir, lookup: lookup, vars: map[string]variable{}}
+	if err := p.definitions(lines); err != nil {
+		return nil, err
+	}
+	for i, line := range lines {
+		p.n = i + 1
+		if err := p.line(line); err != nil {
 			return nil, err
 		}
 	}
@@ -41,27 +51,118 @@ func ParseHTTP(r io.Reader, name, dir string) ([]collect.Request, error) {
 
 // A request is read in three parts, in order.
 const (
-	preamble = iota // blank lines, comments and # @name, up to the request line
+	preamble = iota // blank lines, comments, # @name and variables, up to the request line
 	headers         // the request line's continuation and the headers
 	body            // after the first blank line
 )
 
 type parser struct {
 	name, dir string
+	lookup    func(string) (string, bool)
+	vars      map[string]variable
 	n         int // line number
 	reqs      []collect.Request
+	cur       step
+}
 
+type variable struct {
+	value string
+	line  int
+}
+
+// step is the request being read.
+type step struct {
 	part     int
 	req      collect.Request
 	named    int      // line of # @name, 0 for none
 	header   bool     // a header has been read, so the URL is complete
 	lines    []string // body lines as written, line breaks included
-	file     string   // body file from "< path"
+	file     string   // body file from "< path" or "<@ path"
 	fileLine int
+	expand   bool // fill in the variables in the body file
 }
 
 func (p *parser) errorf(format string, args ...any) error {
 	return fmt.Errorf("%s:%d: %s", p.name, p.n, fmt.Sprintf(format, args...))
+}
+
+// definitions reads the file's "@name = value" lines, which sit where
+// comments can, so that a variable applies to the whole file.
+func (p *parser) definitions(lines []string) error {
+	part := preamble
+	for i, raw := range lines {
+		p.n = i + 1
+		trimmed := strings.TrimSpace(raw)
+		switch {
+		case strings.HasPrefix(trimmed, "###"):
+			part = preamble
+		case part == preamble && strings.HasPrefix(trimmed, "@"):
+			name, value, ok := strings.Cut(trimmed[1:], "=")
+			name = strings.TrimSpace(name)
+			if !ok || !validName(name) {
+				return p.errorf(`want "@name = value"`)
+			}
+			if v, ok := p.vars[name]; ok {
+				return p.errorf("@%s is already set on line %d", name, v.line)
+			}
+			p.vars[name] = variable{strings.TrimSpace(value), p.n}
+		case part == preamble && trimmed != "":
+			if _, ok := comment(trimmed); !ok {
+				part = headers
+			}
+		case part == headers && trimmed == "":
+			part = body
+		}
+	}
+	return nil
+}
+
+var placeholder = regexp.MustCompile(`\{\{(.*?)\}\}`)
+
+// expand fills in the {{variables}} in s.
+func (p *parser) expand(s string) (string, error) {
+	return p.expandSeen(s, nil)
+}
+
+// expandSeen is expand inside the file variables named in seen.
+func (p *parser) expandSeen(s string, seen []string) (string, error) {
+	var err error
+	out := placeholder.ReplaceAllStringFunc(s, func(m string) string {
+		if err != nil {
+			return m
+		}
+		var v string
+		v, err = p.value(strings.TrimSpace(m[2:len(m)-2]), seen)
+		return v
+	})
+	return out, err
+}
+
+// value looks up one variable. Errors name it but never show a value.
+func (p *parser) value(ref string, seen []string) (string, error) {
+	if env, ok := strings.CutPrefix(ref, "$processEnv "); ok {
+		env = strings.TrimSpace(env)
+		if v, ok := p.lookup(env); ok {
+			return v, nil
+		}
+		return "", p.errorf("{{$processEnv %s}} is not set", env)
+	}
+	switch {
+	case strings.HasPrefix(ref, "$"):
+		return "", p.errorf("{{%s}} is not supported", strings.Fields(ref)[0])
+	case strings.Contains(ref, "."):
+		return "", p.errorf("{{%s}} reads an earlier response, which is not supported", ref)
+	}
+	if v, ok := p.vars[ref]; ok {
+		if slices.Contains(seen, ref) {
+			return "", p.errorf("@%s refers to itself", ref)
+		}
+		return p.expandSeen(v.value, append(slices.Clip(seen), ref))
+	}
+	if v, ok := p.lookup(ref); ok {
+		return v, nil
+	}
+	return "", p.errorf("{{%s}} is not set in the file or the environment", ref)
 }
 
 func (p *parser) line(raw string) error {
@@ -71,34 +172,43 @@ func (p *parser) line(raw string) error {
 		return p.finish()
 	}
 
-	switch p.part {
+	c := &p.cur
+	switch c.part {
 	case preamble:
-		if trimmed == "" {
+		if trimmed == "" || strings.HasPrefix(trimmed, "@") {
 			return nil
 		}
-		if c, ok := comment(trimmed); ok {
-			return p.directive(c)
+		if text, ok := comment(trimmed); ok {
+			return p.directive(text)
 		}
 		return p.requestLine(trimmed)
 
 	case headers:
 		switch {
 		case trimmed == "":
-			p.part = body
-		case !p.header && (trimmed[0] == '?' || trimmed[0] == '&'):
-			p.req.URL += trimmed
+			c.part = body
+		case !c.header && (trimmed[0] == '?' || trimmed[0] == '&'):
+			more, err := p.expand(trimmed)
+			if err != nil {
+				return err
+			}
+			c.req.URL += more
 		case trimmed[0] == '>':
 			return p.errorf("response handlers are not supported")
 		default:
 			if _, ok := comment(trimmed); ok {
 				return nil
 			}
+			text, err := p.expand(text)
+			if err != nil {
+				return err
+			}
 			name, value, err := ParseHeader(text)
 			if err != nil {
 				return p.errorf("%v", err)
 			}
-			p.header = true
-			p.req.Header.Add(name, value)
+			c.header = true
+			c.req.Header.Add(name, value)
 		}
 		return nil
 	}
@@ -106,12 +216,18 @@ func (p *parser) line(raw string) error {
 	switch {
 	case strings.HasPrefix(trimmed, ">"):
 		return p.errorf("response handlers are not supported")
-	case p.file != "" && trimmed != "":
+	case c.file != "" && trimmed != "":
 		return p.errorf("a body read from a file can have nothing else")
-	case strings.HasPrefix(trimmed, "< ") && !p.hasBody():
-		p.file, p.fileLine = strings.TrimSpace(trimmed[2:]), p.n
+	case strings.HasPrefix(trimmed, "<@ ") && !c.hasBody():
+		c.file, c.fileLine, c.expand = strings.TrimSpace(trimmed[3:]), p.n, true
+	case strings.HasPrefix(trimmed, "< ") && !c.hasBody():
+		c.file, c.fileLine = strings.TrimSpace(trimmed[2:]), p.n
 	default:
-		p.lines = append(p.lines, raw)
+		raw, err := p.expand(raw)
+		if err != nil {
+			return err
+		}
+		c.lines = append(c.lines, raw)
 	}
 	return nil
 }
@@ -144,7 +260,7 @@ func (p *parser) directive(c string) error {
 	if value == "" {
 		return p.errorf("@name has no name")
 	}
-	p.req.Name, p.named = value, p.n
+	p.cur.req.Name, p.cur.named = value, p.n
 	return nil
 }
 
@@ -154,24 +270,30 @@ func (p *parser) requestLine(s string) error {
 	if len(fields) > 1 && strings.HasPrefix(fields[len(fields)-1], "HTTP/") {
 		fields = fields[:len(fields)-1]
 	}
+	method, url := "GET", ""
 	switch len(fields) {
 	case 1:
-		p.req.Method, p.req.URL = "GET", fields[0]
+		url = fields[0]
 	case 2:
 		if !validName(fields[0]) {
 			return p.errorf("%q is not a method", fields[0])
 		}
-		p.req.Method, p.req.URL = fields[0], fields[1]
+		method, url = fields[0], fields[1]
 	default:
 		return p.errorf(`want "METHOD URL", got %d words`, len(fields))
 	}
-	p.req.Header = http.Header{}
-	p.part = headers
+	url, err := p.expand(url)
+	if err != nil {
+		return err
+	}
+	c := &p.cur
+	c.req.Method, c.req.URL, c.req.Header = method, url, http.Header{}
+	c.part = headers
 	return nil
 }
 
-func (p *parser) hasBody() bool {
-	for _, l := range p.lines {
+func (c *step) hasBody() bool {
+	for _, l := range c.lines {
 		if strings.TrimSpace(l) != "" {
 			return true
 		}
@@ -181,33 +303,41 @@ func (p *parser) hasBody() bool {
 
 // finish ends the request being read, if there is one.
 func (p *parser) finish() error {
-	defer func() { *p = parser{name: p.name, dir: p.dir, n: p.n, reqs: p.reqs} }()
-	if p.part == preamble {
-		if p.named > 0 {
-			p.n = p.named
-			return p.errorf("@name %s has no request after it", p.req.Name)
+	c := p.cur
+	p.cur = step{}
+	if c.part == preamble {
+		if c.named > 0 {
+			p.n = c.named
+			return p.errorf("@name %s has no request after it", c.req.Name)
 		}
 		return nil
 	}
-	if len(p.req.Header) == 0 {
-		p.req.Header = nil
+	if len(c.req.Header) == 0 {
+		c.req.Header = nil
 	}
 
 	switch {
-	case p.file != "":
-		path := p.file
+	case c.file != "":
+		p.n = c.fileLine
+		path := c.file
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(p.dir, path)
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {
-			p.n = p.fileLine
 			return p.errorf("%v", err)
 		}
-		p.req.Body = b
-	case p.hasBody():
+		if c.expand {
+			s, err := p.expand(string(b))
+			if err != nil {
+				return err
+			}
+			b = []byte(s)
+		}
+		c.req.Body = b
+	case c.hasBody():
 		// Blank lines around the body are dropped, then its last line break.
-		lines := p.lines
+		lines := c.lines
 		for strings.TrimSpace(lines[0]) == "" {
 			lines = lines[1:]
 		}
@@ -216,8 +346,8 @@ func (p *parser) finish() error {
 		}
 		last := len(lines) - 1
 		lines[last] = strings.TrimRight(lines[last], "\r\n")
-		p.req.Body = []byte(strings.Join(lines, ""))
+		c.req.Body = []byte(strings.Join(lines, ""))
 	}
-	p.reqs = append(p.reqs, p.req)
+	p.reqs = append(p.reqs, c.req)
 	return nil
 }

@@ -11,9 +11,15 @@ import (
 	"github.com/AustinMusiku/timeline/internal/collect"
 )
 
+// env is the environment the tests see.
+func env(name string) (string, bool) {
+	v, ok := map[string]string{"TOKEN": "secret", "HOST": "api.example.com"}[name]
+	return v, ok
+}
+
 func parse(t *testing.T, file string) ([]collect.Request, error) {
 	t.Helper()
-	return ParseHTTP(strings.NewReader(file), "flow.http", t.TempDir())
+	return ParseHTTP(strings.NewReader(file), "flow.http", t.TempDir(), env)
 }
 
 func TestParseHTTP(t *testing.T) {
@@ -45,7 +51,7 @@ Content-Type: image/png
 
 < ./avatar.png
 `
-	got, err := ParseHTTP(strings.NewReader(file), "flow.http", dir)
+	got, err := ParseHTTP(strings.NewReader(file), "flow.http", dir, env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +119,72 @@ func TestParseHTTPErrors(t *testing.T) {
 		{"BAD/METHOD https://a.example", `flow.http:1: "BAD/METHOD" is not a method`},
 		{"\n\nPOST https://a.example\n\n< ./missing.json", "flow.http:5: open "},
 		{"POST https://a.example\n\n< ./a.json\nmore", "flow.http:4: a body read from a file can have nothing else"},
+	}
+	for _, tc := range tests {
+		_, err := parse(t, tc.file)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%q: error %v, want one starting %q", tc.file, err, tc.want)
+		} else if strings.Contains(err.Error(), "secret") {
+			t.Errorf("%q: error %q gives a value away", tc.file, err)
+		}
+	}
+}
+
+func TestParseHTTPVariables(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "body.json"), []byte(`{"token": "{{$processEnv TOKEN}}"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := `@base = https://{{HOST}}/{{version}}
+
+POST {{base}}/login
+  ?as={{user}}
+Authorization: Bearer {{$processEnv TOKEN}}
+
+{"user": "{{user}}"}
+
+###
+POST {{base}}/raw
+
+< ./body.json
+
+###
+POST {{base}}/filled
+
+<@ ./body.json
+
+###
+@version = v1
+@user = me
+`
+	got, err := ParseHTTP(strings.NewReader(file), "flow.http", dir, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []collect.Request{
+		{
+			Method: "POST", URL: "https://api.example.com/v1/login?as=me",
+			Header: http.Header{"Authorization": {"Bearer secret"}},
+			Body:   []byte(`{"user": "me"}`),
+		},
+		{Method: "POST", URL: "https://api.example.com/v1/raw", Body: []byte(`{"token": "{{$processEnv TOKEN}}"}`)},
+		{Method: "POST", URL: "https://api.example.com/v1/filled", Body: []byte(`{"token": "secret"}`)},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+}
+
+func TestParseHTTPVariableErrors(t *testing.T) {
+	tests := []struct{ file, want string }{
+		{"GET https://a.example/{{missing}}", "flow.http:1: {{missing}} is not set in the file or the environment"},
+		{"GET https://a.example\nX-Key: {{$processEnv MISSING}}", "flow.http:2: {{$processEnv MISSING}} is not set"},
+		{"GET https://a.example/{{$guid}}", "flow.http:1: {{$guid}} is not supported"},
+		{"GET https://a.example\nAuthorization: Bearer {{login.response.body.$.token}}", "flow.http:2: {{login.response.body.$.token}} reads an earlier response"},
+		{"@a = {{b}}\n@b = {{a}}\nGET https://a.example/{{a}}", "flow.http:3: @a refers to itself"},
+		{"@a = 1\n@a = 2\nGET https://a.example", "flow.http:2: @a is already set on line 1"},
+		{"@a\nGET https://a.example", `flow.http:1: want "@name = value"`},
+		{"POST https://a.example\n\n{{TOKEN}} and {{nope}}", "flow.http:3: {{nope}} is not set"},
 	}
 	for _, tc := range tests {
 		_, err := parse(t, tc.file)
