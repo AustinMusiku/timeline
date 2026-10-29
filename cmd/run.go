@@ -92,6 +92,8 @@ func init() {
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
 	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
+	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
+	f.String("key", "", "PEM file of the client certificate's key")
 	viper.BindPFlags(f)
 
 	// These can carry credentials, so they come from the command line only.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 
@@ -28,6 +29,20 @@ func tlsConfig(f *pflag.FlagSet) (*tls.Config, error) {
 		if !cfg.RootCAs.AppendCertsFromPEM(pem) {
 			return nil, fmt.Errorf("--cacert: no certificates in %s", file)
 		}
+	}
+
+	if cert, key := viper.GetString("cert"), viper.GetString("key"); cert != "" {
+		// As in curl, the key can sit in the certificate's file.
+		if key == "" {
+			key = cert
+		}
+		c, err := tls.LoadX509KeyPair(cert, key)
+		if err != nil {
+			return nil, fmt.Errorf("--cert: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{c}
+	} else if key != "" {
+		return nil, errors.New("--key needs --cert")
 	}
 	return cfg, nil
 }

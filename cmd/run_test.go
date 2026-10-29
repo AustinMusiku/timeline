@@ -2,11 +2,18 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -448,6 +456,79 @@ func TestRunTrustsTheCACert(t *testing.T) {
 	for _, file := range []string{empty, filepath.Join(dir, "missing.pem")} {
 		if out, err := execute(t, "run", "--cacert", file, srv.URL); err == nil || out != "" {
 			t.Errorf("--cacert %s: error %v, output %q; want an error and no output", file, err, out)
+		}
+	}
+}
+
+// clientCert writes a self-signed client certificate, its key, and both in one
+// file, and returns the certificate.
+func clientCert(t *testing.T) (certFile, keyFile, both string, cert *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "timeline test client"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert, err = x509.ParseCertificate(der); err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	dir := t.TempDir()
+	certFile, keyFile, both = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"), filepath.Join(dir, "both.pem")
+	for file, b := range map[string][]byte{certFile: certPEM, keyFile: keyPEM, both: append(certPEM, keyPEM...)} {
+		if err := os.WriteFile(file, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return certFile, keyFile, both, cert
+}
+
+func TestRunSendsAClientCertificate(t *testing.T) {
+	certFile, keyFile, both, cert := clientCert(t)
+
+	var seen []string
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.TLS.PeerCertificates[0].Subject.CommonName)
+	}))
+	srv.TLS = &tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: x509.NewCertPool()}
+	srv.TLS.ClientCAs.AddCert(cert)
+	srv.StartTLS()
+	defer srv.Close()
+
+	if out, err := execute(t, "run", "-k", srv.URL); err == nil {
+		t.Errorf("without --cert the server let the request in\n%s", out)
+	}
+	for _, args := range [][]string{{"--cert", certFile, "--key", keyFile}, {"--cert", both}} {
+		if out, err := execute(t, append(append([]string{"run", "-k"}, args...), srv.URL)...); err != nil {
+			t.Errorf("%v: %v\n%s", args, err, out)
+		}
+	}
+	if want := []string{"timeline test client", "timeline test client"}; !slices.Equal(seen, want) {
+		t.Errorf("server saw client certificates %q, want %q", seen, want)
+	}
+
+	for _, args := range [][]string{{"--key", keyFile}, {"--cert", keyFile}, {"--cert", certFile}} {
+		if out, err := execute(t, append(append([]string{"run", "-k"}, args...), srv.URL)...); err == nil || out != "" {
+			t.Errorf("%v: error %v, output %q; want an error and no output", args, err, out)
 		}
 	}
 }
