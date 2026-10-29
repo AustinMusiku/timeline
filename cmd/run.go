@@ -91,6 +91,7 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
 	viper.BindPFlags(f)
 
 	// These can carry credentials, so they come from the command line only.

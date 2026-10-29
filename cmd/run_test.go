@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -419,5 +420,34 @@ func TestRunInsecureSkipsTheCertificateCheck(t *testing.T) {
 	}
 	if out, err := execute(t, "run", "-k", srv.URL); err != nil {
 		t.Errorf("with -k: %v\n%s", err, out)
+	}
+}
+
+func TestRunTrustsTheCACert(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(ca, pemCert, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := execute(t, "run", "--cacert", ca, srv.URL); err != nil {
+		t.Errorf("with --cacert: %v\n%s", err, out)
+	}
+	t.Setenv("TIMELINE_CACERT", ca)
+	if out, err := execute(t, "run", srv.URL); err != nil {
+		t.Errorf("with TIMELINE_CACERT: %v\n%s", err, out)
+	}
+
+	empty := filepath.Join(dir, "empty.pem")
+	if err := os.WriteFile(empty, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{empty, filepath.Join(dir, "missing.pem")} {
+		if out, err := execute(t, "run", "--cacert", file, srv.URL); err == nil || out != "" {
+			t.Errorf("--cacert %s: error %v, output %q; want an error and no output", file, err, out)
+		}
 	}
 }
