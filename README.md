@@ -24,7 +24,8 @@ Or download an archive for Linux or macOS (amd64 and arm64) from the
 timeline run https://example.com https://example.com/about
 ```
 
-Each URL gets a GET, one after the other, in the order given.
+Each URL gets a GET, one after the other, in the order given. For anything
+more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 
 | Flag                  | Default | What it does                                         |
 | --------------------- | ------- | ---------------------------------------------------- |
@@ -38,6 +39,7 @@ Each URL gets a GET, one after the other, in the order given.
 | `-d`, `--data`        |         | Body for every request, `@file` or `@-` for stdin    |
 | `--data-raw`          |         | Like `-d`, but a leading `@` is sent as typed        |
 | `--data-binary`       |         | Like `-d`, but `@file` keeps its line breaks         |
+| `-f`, `--file`        |         | Read the sequence from a `.http` file, `-` for stdin |
 | `-k`, `--insecure`    | off     | Skip checking the server's certificate               |
 | `--cacert`            |         | PEM file of CA certificates to trust                 |
 | `--cert`              |         | PEM file of a client certificate                     |
@@ -85,6 +87,53 @@ and a 301, 302 or 303 turns the request into a GET with no body.
 Writing the body is part of send. A small body is handed to the kernel in one
 go, so send stays short and its trip to the server shows up in wait; send
 grows only once the body outgrows the socket's buffer.
+
+### Sequence files
+
+When each step needs its own method, headers or body, write the sequence in
+the `.http` format that VS Code's REST Client and JetBrains share:
+
+```http
+@base = https://api.example.com
+
+# @name login
+POST {{base}}/login
+Content-Type: application/json
+
+{"user": "me", "password": "{{$processEnv PASSWORD}}"}
+
+###
+# @name me
+GET {{base}}/me
+Authorization: Bearer {{$processEnv TOKEN}}
+```
+
+```sh
+timeline run -f flow.http
+```
+
+Requests are separated by `###` and run in order. A request is its request
+line (`METHOD URL`, or just a URL for a GET), its headers, a blank line, and
+its body. Lines starting with `?` or `&` right after the request line continue
+the URL. `# @name` names a request, and the waterfall shows that name in place
+of its URL. Lines starting with `#` or `//` are comments.
+
+`< ./file` sends a file as the body and `<@ ./file` fills in its variables
+first, both relative to the `.http` file. `@name = value` sets a variable for
+the whole file. `{{name}}` is that variable, or the environment variable of the
+same name; `{{$processEnv NAME}}` is the environment only. A variable that is
+not set is an error, and errors give the file and line but never a value.
+
+`-H` and `-u` apply to every request in the file that does not set the same
+header itself. `-X` and the body flags don't go with `-f`, since each request
+has its own. `-n`, `-c` and the rest work as with URLs.
+
+These parts of the format are errors rather than skipped, since the run would
+not be the one the file describes: response handlers (`> {% ... %}`) and `>>`,
+values from an earlier response (`{{login.response.body.token}}`), generated
+values such as `{{$guid}}`, environment files (`http-client.env.json`), and any
+other `# @` line. Output hides credentials in headers and URLs as usual, but
+not in a query string, so keep secrets out of `?key={{API_KEY}}`.
 
 ### TLS
 
@@ -172,6 +221,7 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
   "seq":0,
   "round":0,
   "hop":0,
+  "name":"",
   "started_at":"2026-10-12T14:01:33.823986Z",
   "offset_ms":0.118,
   "method":"GET",
@@ -209,7 +259,8 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
 ```
 
 Every key is always present. The hops of a redirect share a `seq`, and `hop`
-counts them from 0 for the URL that was given. `request_headers` are the
+counts them from 0 for the URL that was given. `name` is the request's
+`# @name` from a sequence file, and empty otherwise. `request_headers` are the
 headers timeline set, with credentials hidden; Go's client adds `Host`,
 `User-Agent` and the like as it sends. `request_body_bytes` is the size of the
 body sent; the body itself is never written out. `location` is the response's

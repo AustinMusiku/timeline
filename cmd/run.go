@@ -29,6 +29,15 @@ var runCmd = &cobra.Command{
 	Long: `Run sends a GET to each URL in turn and draws every request on one shared
 time axis, with each bar split into the phases the request went through.
 
+--file reads the sequence from a .http file instead, the format VS Code's REST
+Client and JetBrains share, where each request has its own method, headers and
+body. Requests are separated by ###, and # @name names one for the waterfall.
+@name = value sets a variable, and {{name}} reads it or else the environment;
+{{$processEnv NAME}} reads the environment only. An unset variable, a response
+handler, a value from an earlier response, and any other # @ line are errors.
+--header and --user apply to the file's requests; --method and the body flags
+can't be used with it.
+
 --method, --header, --user and the body flags apply to every request. --user
 with no password asks for one on the terminal. An Authorization from --header
 wins over --user. --header, --user and the body flags are read from the command
@@ -61,6 +70,8 @@ and seq, round and offset_ms recover the sequence. Times are milliseconds. A
 request that got no response has status 0 and an error. A 4xx or 5xx is a
 response, so its error is empty.
 
+name is the request's # @name from a --file, and empty otherwise.
+
 The hops of a redirect share a seq, and hop counts them from 0 for the URL
 that was given. location is the response's Location header, or null if it had
 none.
@@ -83,6 +94,8 @@ retried.`,
   timeline run -X POST -u me https://api.example.com/login
   timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
   timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
+  timeline run -f flow.http
+  timeline run -n 3 --json -f flow.http
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		file, _ := cmd.Flags().GetString("file")
