@@ -110,6 +110,8 @@ func TestParseHTTPWithoutRequests(t *testing.T) {
 func TestParseHTTPErrors(t *testing.T) {
 	tests := []struct{ file, want string }{
 		{"# @no-redirect\nGET https://a.example", "flow.http:1: @no-redirect is not supported"},
+		{"GET https://a.example\n# @no-redirect", "flow.http:2: @no-redirect is not supported"},
+		{"GET https://a.example\nAccept: */*\n// @name late", "flow.http:3: @name must come before the request line"},
 		{"GET https://a.example\n\n{}\n> {% client.global.set('t', response.body.token) %}", "flow.http:4: response handlers are not supported"},
 		{"GET https://a.example\n>> out.json", "flow.http:2: response handlers are not supported"},
 		{"GET https://a.example\nAuthorization Bearer secret", `flow.http:2: not "Name: value"`},

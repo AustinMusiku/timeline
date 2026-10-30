@@ -196,7 +196,13 @@ func (p *parser) line(raw string) error {
 		case trimmed[0] == '>':
 			return p.errorf("response handlers are not supported")
 		default:
-			if _, ok := comment(trimmed); ok {
+			if text, ok := comment(trimmed); ok {
+				if key, ok := directiveKey(text); ok {
+					if key == "name" {
+						return p.errorf("@name must come before the request line")
+					}
+					return p.errorf("@%s is not supported", key)
+				}
 				return nil
 			}
 			text, err := p.expand(text)
@@ -243,17 +249,26 @@ func comment(s string) (string, bool) {
 	return "", false
 }
 
-// directive reads a comment that starts with @, such as "@name login".
-func (p *parser) directive(c string) error {
+// directiveKey returns the key of a comment that starts with @, such as
+// "@name login" or "@name=login".
+func directiveKey(c string) (string, bool) {
 	d, ok := strings.CutPrefix(c, "@")
+	if !ok {
+		return "", false
+	}
+	key, _, _ := strings.Cut(d, " ")
+	key, _, _ = strings.Cut(key, "=")
+	return key, true
+}
+
+// directive reads a comment that starts with @.
+func (p *parser) directive(c string) error {
+	key, ok := directiveKey(c)
 	if !ok {
 		return nil
 	}
-	key, value, _ := strings.Cut(d, " ")
-	if k, v, ok := strings.Cut(key, "="); ok {
-		key, value = k, v
-	}
-	value = strings.TrimSpace(value)
+	value := strings.TrimSpace(strings.TrimPrefix(c[1:], key))
+	value = strings.TrimSpace(strings.TrimPrefix(value, "="))
 	if key != "name" {
 		return p.errorf("@%s is not supported", key)
 	}
