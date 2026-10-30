@@ -2,6 +2,23 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.7.0] - 2026-10-30
+
+### Features
+
+- Let the collector take a TLS config
+- Add -k/--insecure
+- Add --cacert
+- Add --cert and --key for client certificates
+- Carry a request's name through to the record
+- Parse .http sequence files
+- Fill in {{variables}} in sequence files
+- Add -f/--file to run
+
+### Fixes
+
+- Reject @ lines after the request line
+
 ## [0.6.0] - 2026-10-28
 
 ### Features
