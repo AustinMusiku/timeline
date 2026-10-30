@@ -22,12 +22,13 @@ type Defaults struct {
 func FromURLs(urls []string, d Defaults) []collect.Request {
 	reqs := make([]collect.Request, len(urls))
 	for i, u := range urls {
-		reqs[i] = d.apply(collect.Request{URL: u})
+		reqs[i] = d.Apply(collect.Request{URL: u})
 	}
 	return reqs
 }
 
-func (d Defaults) apply(r collect.Request) collect.Request {
+// Apply fills in what r leaves out.
+func (d Defaults) Apply(r collect.Request) collect.Request {
 	if r.Method == "" {
 		r.Method = d.Method
 	}

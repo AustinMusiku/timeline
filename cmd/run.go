@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -23,7 +24,7 @@ import (
 )
 
 var runCmd = &cobra.Command{
-	Use:   "run <url>...",
+	Use:   "run <url>... | run -f <file>",
 	Short: "Time a sequence of requests and draw them on one axis",
 	Long: `Run sends a GET to each URL in turn and draws every request on one shared
 time axis, with each bar split into the phases the request went through.
@@ -83,7 +84,16 @@ retried.`,
   timeline run -H 'Content-Type: application/json' -d @body.json https://api.example.com/items
   timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
-	Args: cobra.MinimumNArgs(1),
+	Args: func(cmd *cobra.Command, args []string) error {
+		file, _ := cmd.Flags().GetString("file")
+		switch {
+		case file != "" && len(args) > 0:
+			return errors.New("give URLs or --file, not both")
+		case file == "" && len(args) == 0:
+			return errors.New("give at least one URL, or --file")
+		}
+		return nil
+	},
 	RunE: runSequence,
 }
 
@@ -111,6 +121,9 @@ func init() {
 
 	// Command line only, so no config file can turn certificate checks off.
 	f.BoolP("insecure", "k", false, "skip checking the server's certificate")
+
+	// Command line only, so no config file makes every run read a file.
+	f.StringP("file", "f", "", "read the sequence from a .http file, - for stdin")
 }
 
 // defaults reads the flags that apply to every request.
@@ -170,6 +183,57 @@ func defaults(f *pflag.FlagSet, stdin io.Reader) (sequence.Defaults, error) {
 	return d, nil
 }
 
+// requests builds the sequence from the URLs or the file.
+func requests(f *pflag.FlagSet, urls []string, stdin io.Reader) ([]collect.Request, error) {
+	file, err := f.GetString("file")
+	if err != nil {
+		return nil, err
+	}
+	if file == "" {
+		d, err := defaults(f, stdin)
+		if err != nil {
+			return nil, err
+		}
+		return sequence.FromURLs(urls, d), nil
+	}
+
+	// Each request in a file has its own method and body.
+	if f.Changed("method") {
+		return nil, errors.New("--method can't be used with --file")
+	}
+	if len(dataParts) > 0 {
+		return nil, errors.New("a body flag can't be used with --file")
+	}
+
+	var reqs []collect.Request
+	if file == "-" {
+		file = "stdin"
+		reqs, err = sequence.ParseHTTP(stdin, file, ".", os.LookupEnv)
+	} else {
+		var r *os.File
+		if r, err = os.Open(file); err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		reqs, err = sequence.ParseHTTP(r, file, filepath.Dir(file), os.LookupEnv)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(reqs) == 0 {
+		return nil, fmt.Errorf("no requests in %s", file)
+	}
+
+	d, err := defaults(f, stdin)
+	if err != nil {
+		return nil, err
+	}
+	for i := range reqs {
+		reqs[i] = d.Apply(reqs[i])
+	}
+	return reqs, nil
+}
+
 func runSequence(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	color, err := useColor(viper.GetString("color"), out)
@@ -177,11 +241,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	d, err := defaults(cmd.Flags(), cmd.InOrStdin())
+	reqs, err := requests(cmd.Flags(), args, cmd.InOrStdin())
 	if err != nil {
 		return err
 	}
-	reqs := sequence.FromURLs(args, d)
 	repeat := max(viper.GetInt("repeat"), 1)
 	tlsConf, err := tlsConfig(cmd.Flags())
 	if err != nil {

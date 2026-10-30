@@ -38,7 +38,7 @@ func TestParseHeader(t *testing.T) {
 func TestDefaultsGiveWayToTheRequest(t *testing.T) {
 	d := Defaults{Method: "POST", Header: http.Header{"Accept": {"a"}, "X-Two": {"1", "2"}}}
 
-	got := d.apply(collect.Request{Method: "PUT", URL: "u", Header: http.Header{"Accept": {"b"}}})
+	got := d.Apply(collect.Request{Method: "PUT", URL: "u", Header: http.Header{"Accept": {"b"}}})
 	want := http.Header{"Accept": {"b"}, "X-Two": {"1", "2"}}
 	if !reflect.DeepEqual(got.Header, want) {
 		t.Errorf("header %v, want %v", got.Header, want)
@@ -46,15 +46,15 @@ func TestDefaultsGiveWayToTheRequest(t *testing.T) {
 	if got.Method != "PUT" {
 		t.Errorf("method %q, want PUT", got.Method)
 	}
-	if got := d.apply(collect.Request{URL: "u"}); got.Method != "POST" {
+	if got := d.Apply(collect.Request{URL: "u"}); got.Method != "POST" {
 		t.Errorf("method %q, want the default POST", got.Method)
 	}
 
 	d.Body = []byte("default")
-	if got := d.apply(collect.Request{URL: "u", Body: []byte{}}); got.Body == nil || len(got.Body) != 0 {
+	if got := d.Apply(collect.Request{URL: "u", Body: []byte{}}); got.Body == nil || len(got.Body) != 0 {
 		t.Errorf("body %q, want the request's own empty one", got.Body)
 	}
-	if got := d.apply(collect.Request{URL: "u"}); string(got.Body) != "default" {
+	if got := d.Apply(collect.Request{URL: "u"}); string(got.Body) != "default" {
 		t.Errorf("body %q, want the default", got.Body)
 	}
 
