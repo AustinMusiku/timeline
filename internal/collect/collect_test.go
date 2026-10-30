@@ -796,3 +796,24 @@ func TestTLSConfigIsUsedAndLeftAlone(t *testing.T) {
 		t.Error("the run changed the config it was given")
 	}
 }
+
+func TestNameStaysWithTheStepNotItsHops(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/next", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+
+	got, err := run(t.Context(), transport(srv), []Request{{Name: "start", URL: srv.URL}}, Options{Repeat: 2, MaxRedirects: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range got.Entries {
+		names = append(names, e.Request.Name)
+	}
+	if want := []string{"start", "", "start", ""}; !slices.Equal(names, want) {
+		t.Errorf("entries are named %q, want %q", names, want)
+	}
+}

@@ -532,3 +532,104 @@ func TestRunSendsAClientCertificate(t *testing.T) {
 		}
 	}
 }
+
+// sequenceFile writes a .http file for srv and returns its path.
+func sequenceFile(t *testing.T, srv *httptest.Server, body string) string {
+	t.Helper()
+	t.Setenv("BASE", srv.URL)
+	file := filepath.Join(t.TempDir(), "flow.http")
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+const flow = `# @name login
+POST {{BASE}}/login
+Content-Type: application/json
+
+{"user": "me"}
+
+###
+# @name account
+GET {{BASE}}/account
+Authorization: Bearer {{$processEnv TOKEN}}
+`
+
+func TestRunReadsASequenceFile(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, fmt.Sprintf("%s %s %q %q %q", r.Method, r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-Extra"), b))
+	}))
+	defer srv.Close()
+	t.Setenv("TOKEN", "secret")
+	file := sequenceFile(t, srv, flow)
+
+	out, err := execute(t, "run", "-n", "2", "-f", file, "-H", "X-Extra: 1", "-H", "Authorization: Basic other")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	login := `POST /login "Basic other" "1" "{\"user\": \"me\"}"`
+	account := `GET /account "Bearer secret" "1" ""`
+	if want := []string{login, account, login, account}; !slices.Equal(got, want) {
+		t.Errorf("server saw\n%q\nwant\n%q", got, want)
+	}
+	for _, row := range []string{" 1  200  #1  login ", " 2  200  #1  account "} {
+		if !strings.Contains(out, row) {
+			t.Errorf("no row contains %q\n%s", row, out)
+		}
+	}
+
+	out, err = execute(t, "run", "--json", "-f", file)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if l := lines(t, out); len(l) != 2 || l[0]["name"] != "login" || l[1]["name"] != "account" {
+		t.Errorf("the JSON does not name the requests\n%s", out)
+	}
+	if strings.Contains(out, "secret") {
+		t.Errorf("the token is in the output\n%s", out)
+	}
+}
+
+func TestRunReadsASequenceFromStdin(t *testing.T) {
+	srv, got := echo(t)
+	t.Setenv("BASE", srv.URL)
+	rootCmd.SetIn(strings.NewReader("POST {{BASE}}\n\nhello\n"))
+	defer rootCmd.SetIn(nil)
+
+	if out, err := execute(t, "run", "-f", "-"); err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if want := []string{"POST  hello"}; !slices.Equal(*got, want) {
+		t.Errorf("server saw %q, want %q", *got, want)
+	}
+}
+
+func TestRunRejectsBadSequences(t *testing.T) {
+	srv, _ := echo(t)
+	file := sequenceFile(t, srv, flow)
+	t.Setenv("TOKEN", "secret")
+	empty := sequenceFile(t, srv, "# nothing here\n")
+	broken := sequenceFile(t, srv, "GET {{BASE}}\n# @no-redirect\n")
+
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-f", file, srv.URL}, "give URLs or --file, not both"},
+		{[]string{"-f", file, "-X", "PUT"}, "--method can't be used with --file"},
+		{[]string{"-f", file, "-d", "a=1"}, "a body flag can't be used with --file"},
+		{[]string{"-f", file, "--data-raw", "a=1"}, "a body flag can't be used with --file"},
+		{[]string{"-f", empty}, "no requests in " + empty},
+		{[]string{"-f", filepath.Join(t.TempDir(), "missing.http")}, "open "},
+		{[]string{"-f", broken}, broken + ":2: @no-redirect is not supported"},
+	}
+	for _, tc := range tests {
+		out, err := execute(t, append([]string{"run"}, tc.args...)...)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) || out != "" {
+			t.Errorf("%v: error %v, output %q; want an error starting %q and no output", tc.args, err, out, tc.want)
+		}
+	}
+}

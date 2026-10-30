@@ -45,6 +45,8 @@ type Entry struct {
 }
 
 type Request struct {
+	// Name labels a step of the sequence. A redirect hop has none.
+	Name   string
 	Method string
 	URL    string
 	// Header is what the request was given. The client adds Host,

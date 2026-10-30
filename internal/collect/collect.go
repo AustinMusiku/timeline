@@ -21,6 +21,7 @@ import (
 
 // Request is one step of a sequence.
 type Request struct {
+	Name   string // optional label for the step
 	Method string // GET when empty
 	URL    string
 	Header http.Header
@@ -117,6 +118,9 @@ send:
 				for req, hop := tmpl, 0; req != nil; hop++ {
 					e := do(ctx, client, &seen, req, opts.Timeout, started)
 					e.Seq, e.Round, e.Hop = seq, round, hop
+					if hop == 0 {
+						e.Request.Name = reqs[seq].Name
+					}
 
 					req = redirect(req, e.Response)
 					if req != nil && hop >= redirects {

@@ -211,6 +211,32 @@ func TestRedirectHopsAreDrawn(t *testing.T) {
 	}
 }
 
+func TestNamedRowsShowTheirName(t *testing.T) {
+	run := &record.Run{Entries: []record.Entry{
+		{
+			Request:  record.Request{Name: "login", Method: "POST", URL: "http://example.com/login"},
+			Response: &record.Response{Status: 302},
+			Timings:  record.Timings{Wait: 10 * ms},
+		},
+		{
+			Hop: 1, Offset: 10 * ms,
+			Request:  record.Request{Method: "GET", URL: "http://example.com/home"},
+			Response: &record.Response{Status: 200},
+			Timings:  record.Timings{Wait: 10 * ms},
+		},
+	}}
+	got := draw(t, run, Options{Width: 80})
+
+	for _, want := range []string{"\n 1  302  login  ", "\n    200  ↳ http://example.com/home  "} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no line contains %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "/login") {
+		t.Errorf("a named row still shows its URL\n%s", got)
+	}
+}
+
 func TestOverlappingRowsAreSpacedApart(t *testing.T) {
 	req := record.Request{Method: "GET", URL: "https://example.com"}
 	ok := &record.Response{Status: 200}
