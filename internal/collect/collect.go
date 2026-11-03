@@ -3,6 +3,7 @@ package collect
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -26,7 +27,31 @@ type Request struct {
 	URL    string
 	Header http.Header
 	Body   []byte // nil for none
+
+	// Build, if set, makes the request just before it is sent, from the
+	// responses that the steps in After got earlier in the same round. The
+	// fields above then only label a step that could not be built.
+	Build func(Responses) (Request, error)
+	After []int
+	// Keep holds on to the step's response for a later step's Build.
+	Keep bool
 }
+
+// Response is what a kept step got, from the last hop of its redirects.
+type Response struct {
+	Status int
+	Header http.Header
+	// Body is decoded from gzip. BodyErr says why it could not be read.
+	Body    []byte
+	BodyErr error
+}
+
+// Responses holds kept responses by step index. A step that got no
+// response is missing.
+type Responses map[int]*Response
+
+// maxKept bounds a kept body.
+const maxKept = 16 << 20
 
 type Options struct {
 	// Repeat is how many times to run the whole sequence. Minimum 1.
@@ -60,6 +85,9 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 
 	tmpls := make([]*http.Request, len(reqs))
 	for i, r := range reqs {
+		if r.Build != nil {
+			continue
+		}
 		req, err := newRequest(r)
 		if err != nil {
 			return nil, fmt.Errorf("request %d: %w", i+1, err)
@@ -103,6 +131,13 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 	slots := make(chan struct{}, concurrency)
 send:
 	for round := range repeat {
+		// What each step of the round got, written before its done closes.
+		got := make([]*Response, len(reqs))
+		done := make([]chan struct{}, len(reqs))
+		for i := range done {
+			done[i] = make(chan struct{})
+		}
+
 		for seq, tmpl := range tmpls {
 			// After a cancel, in-flight requests fail fast and free a slot.
 			slots <- struct{}{}
@@ -115,12 +150,38 @@ send:
 
 			wg.Go(func() {
 				defer func() { <-slots }()
-				for req, hop := tmpl, 0; req != nil; hop++ {
-					e := do(ctx, client, &seen, req, opts.Timeout, started)
+				defer close(done[seq])
+
+				add := func(e record.Entry) {
+					*chain = append(*chain, e)
+					if opts.OnEntry != nil {
+						emit.Lock()
+						opts.OnEntry(e)
+						emit.Unlock()
+					}
+				}
+
+				req := tmpl
+				if r := reqs[seq]; r.Build != nil {
+					var err error
+					if req, err = build(ctx, r, got, done); err != nil {
+						now := time.Now()
+						add(record.Entry{
+							Seq: seq, Round: round, Started: now, Offset: now.Sub(started),
+							Request: record.Request{Name: r.Name, Method: r.Method, URL: r.URL},
+							Error:   err.Error(),
+						})
+						return
+					}
+				}
+
+				for hop := 0; req != nil; hop++ {
+					e, resp := do(ctx, client, &seen, req, opts.Timeout, started, reqs[seq].Keep)
 					e.Seq, e.Round, e.Hop = seq, round, hop
 					if hop == 0 {
 						e.Request.Name = reqs[seq].Name
 					}
+					got[seq] = resp
 
 					req = redirect(req, e.Response)
 					if req != nil && hop >= redirects {
@@ -132,13 +193,7 @@ send:
 					if e.Error != "" || ctx.Err() != nil {
 						req = nil
 					}
-
-					*chain = append(*chain, e)
-					if opts.OnEntry != nil {
-						emit.Lock()
-						opts.OnEntry(e)
-						emit.Unlock()
-					}
+					add(e)
 				}
 			})
 		}
@@ -148,6 +203,26 @@ send:
 	wg.Wait()
 
 	return &record.Run{Started: started, Entries: slices.Concat(chains[:sent]...)}, ctx.Err()
+}
+
+// build waits for the steps r reads, then makes its request.
+func build(ctx context.Context, r Request, got []*Response, done []chan struct{}) (*http.Request, error) {
+	earlier := Responses{}
+	for _, i := range r.After {
+		select {
+		case <-done[i]:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if got[i] != nil {
+			earlier[i] = got[i]
+		}
+	}
+	built, err := r.Build(earlier)
+	if err != nil {
+		return nil, err
+	}
+	return newRequest(built)
 }
 
 // stopped is the error of a redirect left unfollowed at the limit.
@@ -236,8 +311,9 @@ func newRequest(r Request) (*http.Request, error) {
 	return req, nil
 }
 
-// do sends one request and reads its body to the end.
-func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time) record.Entry {
+// do sends one request and reads its body to the end. With keep, it also
+// returns what the request got.
+func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time, keep bool) (record.Entry, *Response) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -261,11 +337,21 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 		},
 	}
 
+	var kept *Response
 	resp, err := client.Do(req)
 	if err == nil {
 		e.Response = &record.Response{Status: resp.StatusCode, Proto: resp.Proto, Header: resp.Header}
-		e.Response.BodySize, err = io.Copy(io.Discard, resp.Body)
+		var buf bytes.Buffer
+		dst := io.Discard
+		if keep {
+			dst = &capped{&buf, maxKept}
+		}
+		e.Response.BodySize, err = io.Copy(dst, resp.Body)
 		resp.Body.Close()
+		if keep && err == nil {
+			kept = &Response{Status: resp.StatusCode, Header: resp.Header}
+			kept.Body, kept.BodyErr = decode(buf.Bytes(), e.Response.BodySize, resp.Header.Get("Content-Encoding"))
+		}
 	}
 	if err != nil {
 		// The entry already has the method and URL the client adds.
@@ -276,7 +362,45 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 		e.Error = err.Error()
 	}
 	m.finish(&e)
-	return e
+	return e, kept
+}
+
+// capped writes to buf until it holds n bytes, then drops the rest.
+type capped struct {
+	buf *bytes.Buffer
+	n   int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.n - c.buf.Len(); room > 0 {
+		c.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// decode returns a kept body as text, given its size as sent.
+func decode(b []byte, size int64, encoding string) ([]byte, error) {
+	if size > int64(len(b)) {
+		return nil, fmt.Errorf("the body is over %d MiB", maxKept>>20)
+	}
+	switch encoding {
+	case "":
+		return b, nil
+	case "gzip":
+		zr, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil, fmt.Errorf("the gzip body is broken: %w", err)
+		}
+		out, err := io.ReadAll(io.LimitReader(zr, maxKept+1))
+		if err != nil {
+			return nil, fmt.Errorf("the gzip body is broken: %w", err)
+		}
+		if len(out) > maxKept {
+			return nil, fmt.Errorf("the body is over %d MiB", maxKept>>20)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("the body is %s-encoded", encoding)
 }
 
 // conns numbers the connections of a run in the order they are first used.
