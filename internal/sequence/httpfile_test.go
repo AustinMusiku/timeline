@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -182,7 +183,12 @@ func TestParseHTTPVariableErrors(t *testing.T) {
 		{"GET https://a.example/{{missing}}", "flow.http:1: {{missing}} is not set in the file or the environment"},
 		{"GET https://a.example\nX-Key: {{$processEnv MISSING}}", "flow.http:2: {{$processEnv MISSING}} is not set"},
 		{"GET https://a.example/{{$guid}}", "flow.http:1: {{$guid}} is not supported"},
-		{"GET https://a.example\nAuthorization: Bearer {{login.response.body.$.token}}", "flow.http:2: {{login.response.body.$.token}} reads an earlier response"},
+		{"GET https://a.example\nAuthorization: Bearer {{login.response.body.token}}", "flow.http:2: {{login.response.body.token}}: no request named login before this one"},
+		{"# @name a\nGET https://a.example/{{b.response.body.x}}\n###\n# @name b\nGET https://b.example", "flow.http:2: {{b.response.body.x}}: no request named b before this one"},
+		{"# @name a\nGET https://a.example/{{a.response.body.x}}", "flow.http:2: {{a.response.body.x}}: no request named a before this one"},
+		{"# @name a\nGET https://a.example\n###\nGET https://a.example/{{a.request.body.x}}", "flow.http:4: {{a.request.body.x}}: reading an earlier request is not supported"},
+		{"# @name a\nGET https://a.example\n###\nGET https://a.example/{{a.response.status}}", "flow.http:4: {{a.response.status}}: want body.<path> or headers.<name>"},
+		{"# @name a\nGET https://a.example\n###\n# @name a\nGET https://a.example", "flow.http:4: @name a is already used on line 1"},
 		{"@a = {{b}}\n@b = {{a}}\nGET https://a.example/{{a}}", "flow.http:3: @a refers to itself"},
 		{"@a = 1\n@a = 2\nGET https://a.example", "flow.http:2: @a is already set on line 1"},
 		{"@a\nGET https://a.example", `flow.http:1: want "@name = value"`},
@@ -195,5 +201,76 @@ func TestParseHTTPVariableErrors(t *testing.T) {
 		} else if strings.Contains(err.Error(), "secret") {
 			t.Errorf("%q: error %q gives a value away", tc.file, err)
 		}
+	}
+}
+
+func TestParseHTTPResponseValues(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "raw.json"), []byte(`{{login.response.body.token}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := `@token = {{login.response.body.access_token}}
+
+# @name login
+POST https://api.example.com/token
+
+{"password": "{{$processEnv TOKEN}}"}
+
+###
+# @name account
+GET https://api.example.com/account?id={{login.response.body.$.user.id}}
+Authorization: Bearer {{token}}
+X-Request: {{login.response.headers.X-Request-Id}}
+
+{"user": {{login.response.body.user}}}
+
+###
+POST https://api.example.com/raw
+Authorization: Bearer {{token}}
+
+< ./raw.json
+`
+	reqs, err := ParseHTTP(strings.NewReader(file), "flow.http", dir, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 3 || !reqs[0].Keep || reqs[0].Build != nil || reqs[1].Build == nil || !slices.Equal(reqs[1].After, []int{0}) {
+		t.Fatalf("got %+v, want login kept and account built after it", reqs)
+	}
+
+	login := &collect.Response{
+		Status: 200,
+		Header: http.Header{"X-Request-Id": {"r1"}},
+		Body:   []byte(`{"access_token": "tok", "user": {"id": 7}}`),
+	}
+	got, err := reqs[1].Build(collect.Responses{0: login})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := collect.Request{
+		Name: "account", Method: "GET", URL: "https://api.example.com/account?id=7",
+		Header: http.Header{"Authorization": {"Bearer tok"}, "X-Request": {"r1"}},
+		Body:   []byte(`{"user": {"id":7}}`),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("built %+v\nwant  %+v", got, want)
+	}
+
+	// A body read with "<" is sent as it is.
+	raw, err := reqs[2].Build(collect.Responses{0: login})
+	if err != nil || string(raw.Body) != "{{login.response.body.token}}" || raw.Header.Get("Authorization") != "Bearer tok" {
+		t.Errorf("built %+v, %v; want the raw body and the token in the header", raw, err)
+	}
+
+	if _, err := reqs[1].Build(collect.Responses{}); err == nil || !strings.Contains(err.Error(), "login got no response") {
+		t.Errorf("without login's response: error %v, want login got no response", err)
+	}
+	denied := &collect.Response{Status: 401, Header: http.Header{}, Body: []byte(`{"error": "secret"}`)}
+	_, err = reqs[1].Build(collect.Responses{0: denied})
+	// The URL is filled in first, so its value is the one missed.
+	if err == nil || err.Error() != "{{login.response.body.$.user.id}}: the body has no user" {
+		t.Errorf("with a 401: error %v, want the body has no user", err)
+	} else if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error %q gives the body away", err)
 	}
 }

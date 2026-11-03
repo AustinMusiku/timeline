@@ -2,6 +2,7 @@ package sequence
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,7 +34,7 @@ func ParseHTTP(r io.Reader, name, dir string, lookup func(string) (string, bool)
 		}
 	}
 
-	p := &parser{name: name, dir: dir, lookup: lookup, vars: map[string]variable{}}
+	p := &parser{name: name, dir: dir, lookup: lookup, vars: map[string]variable{}, steps: map[string]named{}}
 	if err := p.definitions(lines); err != nil {
 		return nil, err
 	}
@@ -60,7 +61,8 @@ type parser struct {
 	name, dir string
 	lookup    func(string) (string, bool)
 	vars      map[string]variable
-	n         int // line number
+	steps     map[string]named // the named steps read so far
+	n         int              // line number
 	reqs      []collect.Request
 	cur       step
 }
@@ -68,6 +70,10 @@ type parser struct {
 type variable struct {
 	value string
 	line  int
+}
+
+type named struct {
+	index, line int
 }
 
 // step is the request being read.
@@ -79,7 +85,8 @@ type step struct {
 	lines    []string // body lines as written, line breaks included
 	file     string   // body file from "< path" or "<@ path"
 	fileLine int
-	expand   bool // fill in the variables in the body file
+	expand   bool  // fill in the variables in the body file
+	after    []int // the earlier steps whose responses it reads
 }
 
 func (p *parser) errorf(format string, args ...any) error {
@@ -151,7 +158,7 @@ func (p *parser) value(ref string, seen []string) (string, error) {
 	case strings.HasPrefix(ref, "$"):
 		return "", p.errorf("{{%s}} is not supported", strings.Fields(ref)[0])
 	case strings.Contains(ref, "."):
-		return "", p.errorf("{{%s}} reads an earlier response, which is not supported", ref)
+		return p.response(ref)
 	}
 	if v, ok := p.vars[ref]; ok {
 		if slices.Contains(seen, ref) {
@@ -163,6 +170,43 @@ func (p *parser) value(ref string, seen []string) (string, error) {
 		return v, nil
 	}
 	return "", p.errorf("{{%s}} is not set in the file or the environment", ref)
+}
+
+// response checks a {{name.response.path}} and leaves it to be filled in
+// when the step is sent.
+func (p *parser) response(ref string) (string, error) {
+	r, err := parseRef(ref)
+	if err != nil {
+		return "", p.errorf("{{%s}}: %v", ref, err)
+	}
+	s, ok := p.steps[r.step]
+	if !ok {
+		return "", p.errorf("{{%s}}: no request named %s before this one", ref, r.step)
+	}
+	if !slices.Contains(p.cur.after, s.index) {
+		p.cur.after = append(p.cur.after, s.index)
+	}
+	return "{{" + ref + "}}", nil
+}
+
+// ref is a parsed {{name.response.path}}.
+type ref struct {
+	step string
+	path responsePath
+}
+
+func parseRef(s string) (ref, error) {
+	step, rest, _ := strings.Cut(s, ".")
+	kind, path, _ := strings.Cut(rest, ".")
+	switch kind {
+	case "response":
+	case "request":
+		return ref{}, errors.New("reading an earlier request is not supported")
+	default:
+		return ref{}, errors.New("want <name>.response.body.<path> or <name>.response.headers.<name>")
+	}
+	rp, err := parsePath(path)
+	return ref{step, rp}, err
 }
 
 func (p *parser) line(raw string) error {
@@ -275,6 +319,9 @@ func (p *parser) directive(c string) error {
 	if value == "" {
 		return p.errorf("@name has no name")
 	}
+	if s, ok := p.steps[value]; ok {
+		return p.errorf("@name %s is already used on line %d", value, s.line)
+	}
 	p.cur.req.Name, p.cur.named = value, p.n
 	return nil
 }
@@ -363,6 +410,63 @@ func (p *parser) finish() error {
 		lines[last] = strings.TrimRight(lines[last], "\r\n")
 		c.req.Body = []byte(strings.Join(lines, ""))
 	}
+
+	if len(c.after) > 0 {
+		for _, i := range c.after {
+			p.reqs[i].Keep = true
+		}
+		tmpl, indexes := c.req, map[string]int{}
+		for name, s := range p.steps {
+			indexes[name] = s.index
+		}
+		rawBody := c.file != "" && !c.expand
+		c.req.After = c.after
+		c.req.Build = func(rs collect.Responses) (collect.Request, error) {
+			return fill(tmpl, rawBody, indexes, rs)
+		}
+	}
+	if c.named > 0 {
+		p.steps[c.req.Name] = named{len(p.reqs), c.named}
+	}
 	p.reqs = append(p.reqs, c.req)
 	return nil
+}
+
+// fill makes a step's request from tmpl, with the values of earlier
+// responses in place of their {{name.response.path}}.
+func fill(tmpl collect.Request, rawBody bool, indexes map[string]int, rs collect.Responses) (collect.Request, error) {
+	var err error
+	sub := func(s string) string {
+		return placeholder.ReplaceAllStringFunc(s, func(m string) string {
+			text := strings.TrimSpace(m[2 : len(m)-2])
+			r, perr := parseRef(text)
+			if err != nil || perr != nil {
+				return m
+			}
+			resp, ok := rs[indexes[r.step]]
+			if !ok {
+				err = fmt.Errorf("{{%s}}: %s got no response", text, r.step)
+				return m
+			}
+			v, verr := r.path.value(resp)
+			if verr != nil {
+				err = fmt.Errorf("{{%s}}: %v", text, verr)
+			}
+			return v
+		})
+	}
+
+	out := collect.Request{Name: tmpl.Name, Method: tmpl.Method, URL: sub(tmpl.URL), Body: tmpl.Body}
+	if tmpl.Header != nil {
+		out.Header = make(http.Header, len(tmpl.Header))
+		for name, values := range tmpl.Header {
+			for _, v := range values {
+				out.Header.Add(name, sub(v))
+			}
+		}
+	}
+	if tmpl.Body != nil && !rawBody {
+		out.Body = []byte(sub(string(tmpl.Body)))
+	}
+	return out, err
 }
