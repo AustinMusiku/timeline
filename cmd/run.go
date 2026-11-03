@@ -34,7 +34,13 @@ Client and JetBrains share, where each request has its own method, headers and
 body. Requests are separated by ###, and # @name names one for the waterfall.
 @name = value sets a variable, and {{name}} reads it or else the environment;
 {{$processEnv NAME}} reads the environment only. An unset variable, a response
-handler, a value from an earlier response, and any other # @ line are errors.
+handler, and any other # @ line are errors.
+
+{{login.response.body.access_token}} is a value from the response of an
+earlier request named login: body.<path> reads its JSON, with a.b[0] for
+nested keys and lists and body.* for the whole body, and headers.<name> reads
+a header. A request that reads one waits for that request, even with
+--concurrency, and is not sent if the value is missing; its row shows ERR.
 --header and --user apply to the file's requests; --method and the body flags
 can't be used with it.
 
