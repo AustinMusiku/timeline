@@ -696,3 +696,32 @@ func TestRunUsesAValueFromAnEarlierResponse(t *testing.T) {
 		t.Errorf("a secret is in the output\n%s", out)
 	}
 }
+
+func TestRunKeepsCookies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "secret-session", Path: "/"})
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "--cookies", srv.URL+"/login", srv.URL+"/me")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	h, _ := lines(t, out)[1]["request_headers"].(map[string]any)
+	if want := []any{"session=xxxxx"}; !reflect.DeepEqual(h["Cookie"], want) {
+		t.Errorf("/me sent Cookie %v, want %v", h["Cookie"], want)
+	}
+	if strings.Contains(out, "secret-session") {
+		t.Errorf("the cookie's value is in the output\n%s", out)
+	}
+
+	out, err = execute(t, "run", "--json", srv.URL+"/login", srv.URL+"/me")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if h, _ := lines(t, out)[1]["request_headers"].(map[string]any); h["Cookie"] != nil {
+		t.Errorf("without --cookies /me sent Cookie %v", h["Cookie"])
+	}
+}

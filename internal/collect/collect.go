@@ -11,11 +11,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptrace"
 	"net/url"
 	"slices"
 	"sync"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 
 	"github.com/AustinMusiku/timeline/internal/record"
 )
@@ -65,6 +68,9 @@ type Options struct {
 	MaxRedirects int
 	// TLS, if set, is copied for every connection the run makes.
 	TLS *tls.Config
+	// Cookies keeps the cookies responses set and sends them on, across
+	// rounds too.
+	Cookies bool
 	// OnEntry, if set, is called with each entry as its request finishes,
 	// one call at a time.
 	OnEntry func(record.Entry)
@@ -118,6 +124,10 @@ func run(ctx context.Context, tr *http.Transport, reqs []Request, opts Options) 
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	if opts.Cookies {
+		// The list stops foo.co.uk setting a cookie for bar.co.uk.
+		client.Jar, _ = cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	}
 
 	started := time.Now()
@@ -332,13 +342,14 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 		Started: m.start,
 		Offset:  m.start.Sub(origin),
 		Request: record.Request{
-			Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone(),
-			BodySize: req.ContentLength,
+			Method: req.Method, URL: req.URL.String(), BodySize: req.ContentLength,
 		},
 	}
 
 	var kept *Response
 	resp, err := client.Do(req)
+	// Taken after the send, which adds the jar's cookies.
+	e.Request.Header = req.Header.Clone()
 	if err == nil {
 		e.Response = &record.Response{Status: resp.StatusCode, Proto: resp.Proto, Header: resp.Header}
 		var buf bytes.Buffer

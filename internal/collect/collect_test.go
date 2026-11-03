@@ -970,3 +970,40 @@ func TestDecode(t *testing.T) {
 		}
 	}
 }
+
+func TestCookiesAreKeptWhenAsked(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("Cookie"))
+		mu.Unlock()
+		if r.URL.Path == "/login" {
+			// Set on the redirect, as a login form usually does.
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "s1", Path: "/"})
+			http.Redirect(w, r, "/home", http.StatusSeeOther)
+		}
+	}))
+	defer srv.Close()
+	reqs := []Request{{URL: srv.URL + "/login"}, {URL: srv.URL + "/me"}}
+
+	got, err := run(t.Context(), transport(srv), reqs, Options{Repeat: 2, MaxRedirects: 1, Cookies: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/login ", "/home session=s1", "/me session=s1", "/login session=s1", "/home session=s1", "/me session=s1"}
+	if !slices.Equal(seen, want) {
+		t.Errorf("server saw\n%q\nwant\n%q", seen, want)
+	}
+	if c := got.Entries[2].Request.Header.Get("Cookie"); c != "session=s1" {
+		t.Errorf("the entry for /me records Cookie %q, want the one the jar added", c)
+	}
+
+	seen = nil
+	if _, err := run(t.Context(), transport(srv), reqs, Options{MaxRedirects: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/login ", "/home ", "/me "}; !slices.Equal(seen, want) {
+		t.Errorf("without Cookies the server saw %q, want %q", seen, want)
+	}
+}

@@ -126,6 +126,7 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.Bool("cookies", false, "keep the cookies responses set and send them with later requests")
 	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
 	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
 	f.String("key", "", "PEM file of the client certificate's key")
@@ -279,6 +280,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Timeout:      viper.GetDuration("timeout"),
 		MaxRedirects: viper.GetInt("max-redirects"),
 		TLS:          tlsConf,
+		Cookies:      viper.GetBool("cookies"),
 	}
 	asJSON := viper.GetBool("json")
 	var writeErr error
