@@ -56,6 +56,10 @@ The body flags work as in curl. A body makes the request a POST unless
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
 
+--cookies keeps the cookies that responses set and sends them with later
+requests to the same site, for the whole run. With --concurrency above 1, a
+request may go out before the one that sets its cookie has finished.
+
 --cacert trusts the certificates in a PEM file in place of the system's.
 --cert sends a client certificate, with its key from --key or from the same
 file. --insecure skips checking the server's certificate, and is read from the

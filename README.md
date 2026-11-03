@@ -40,6 +40,7 @@ more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 | `--data-raw`          |         | Like `-d`, but a leading `@` is sent as typed        |
 | `--data-binary`       |         | Like `-d`, but `@file` keeps its line breaks         |
 | `-f`, `--file`        |         | Read the sequence from a `.http` file, `-` for stdin |
+| `--cookies`           | off     | Keep the cookies responses set and send them on      |
 | `-k`, `--insecure`    | off     | Skip checking the server's certificate               |
 | `--cacert`            |         | PEM file of CA certificates to trust                 |
 | `--cert`              |         | PEM file of a client certificate                     |
@@ -150,6 +151,22 @@ values from an earlier request (`{{login.request.body.user}}`), generated
 values such as `{{$guid}}`, environment files (`http-client.env.json`), and any
 other `# @` line. Output hides credentials in headers and URLs as usual, but
 not in a query string, so keep secrets out of `?key={{API_KEY}}`.
+
+### Cookies
+
+```sh
+timeline run --cookies -f login.http
+```
+
+`--cookies` keeps the cookies that responses set, redirects included, and
+sends them with later requests to the same site, as a browser would. They last
+for the whole run, so a later round starts with the cookies of the one before.
+It is off by default, so that rounds stay the same unless you ask. The
+`Cookie` a request sent is in `request_headers` with its values hidden.
+
+With `-c` above 1, requests can overlap, so a request may go out before the
+one that sets its cookie has finished. A request that reads a value from an
+earlier response waits for it, but a cookie gives no such link.
 
 ### TLS
 
