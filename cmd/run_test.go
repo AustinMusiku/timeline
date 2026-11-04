@@ -633,3 +633,95 @@ func TestRunRejectsBadSequences(t *testing.T) {
 		}
 	}
 }
+
+const loginFlow = `# @name login
+@password = hunter2
+POST {{BASE}}/token
+Content-Type: application/json
+
+{"email": "me@example.com", "password": "{{password}}"}
+
+###
+# @name account
+GET {{BASE}}/account
+Authorization: Bearer {{login.response.body.access_token}}
+`
+
+func TestRunUsesAValueFromAnEarlierResponse(t *testing.T) {
+	var failLogin bool
+	var extras []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			if failLogin {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			io.WriteString(w, `{"access_token": "tok-secret-123"}`)
+		case "/account":
+			extras = append(extras, r.Header.Get("X-Extra"))
+			if r.Header.Get("Authorization") != "Bearer tok-secret-123" {
+				w.WriteHeader(http.StatusUnauthorized)
+			}
+		}
+	}))
+	defer srv.Close()
+	file := sequenceFile(t, srv, loginFlow)
+
+	out, err := execute(t, "run", "--json", "-n", "2", "-H", "X-Extra: 1", "-f", file)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	for i, l := range lines(t, out) {
+		if l["status"] != float64(200) {
+			t.Errorf("line %d (%v) has status %v, want 200", i, l["name"], l["status"])
+		}
+	}
+	if !slices.Equal(extras, []string{"1", "1"}) {
+		t.Errorf("account got X-Extra %q, want -H applied both rounds", extras)
+	}
+
+	failLogin = true
+	out, err = execute(t, "run", "-f", file)
+	// A 500 is a response; only the step that could not be built failed.
+	if err == nil || err.Error() != "1 of 2 requests failed" {
+		t.Errorf("error %v, want 1 of 2 requests failed", err)
+	}
+	for _, want := range []string{" 2  ERR  ", "{{login.response.body.access_token}}: the body is not JSON"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "tok-secret-123") || strings.Contains(out, "hunter2") {
+		t.Errorf("a secret is in the output\n%s", out)
+	}
+}
+
+func TestRunKeepsCookies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "secret-session", Path: "/"})
+		}
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "--json", "--cookies", srv.URL+"/login", srv.URL+"/me")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	h, _ := lines(t, out)[1]["request_headers"].(map[string]any)
+	if want := []any{"session=xxxxx"}; !reflect.DeepEqual(h["Cookie"], want) {
+		t.Errorf("/me sent Cookie %v, want %v", h["Cookie"], want)
+	}
+	if strings.Contains(out, "secret-session") {
+		t.Errorf("the cookie's value is in the output\n%s", out)
+	}
+
+	out, err = execute(t, "run", "--json", srv.URL+"/login", srv.URL+"/me")
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if h, _ := lines(t, out)[1]["request_headers"].(map[string]any); h["Cookie"] != nil {
+		t.Errorf("without --cookies /me sent Cookie %v", h["Cookie"])
+	}
+}

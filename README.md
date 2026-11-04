@@ -40,6 +40,7 @@ more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 | `--data-raw`          |         | Like `-d`, but a leading `@` is sent as typed        |
 | `--data-binary`       |         | Like `-d`, but `@file` keeps its line breaks         |
 | `-f`, `--file`        |         | Read the sequence from a `.http` file, `-` for stdin |
+| `--cookies`           | off     | Keep the cookies responses set and send them on      |
 | `-k`, `--insecure`    | off     | Skip checking the server's certificate               |
 | `--cacert`            |         | PEM file of CA certificates to trust                 |
 | `--cert`              |         | PEM file of a client certificate                     |
@@ -105,7 +106,7 @@ Content-Type: application/json
 ###
 # @name me
 GET {{base}}/me
-Authorization: Bearer {{$processEnv TOKEN}}
+Authorization: Bearer {{login.response.body.access_token}}
 ```
 
 ```sh
@@ -124,16 +125,48 @@ the whole file. `{{name}}` is that variable, or the environment variable of the
 same name; `{{$processEnv NAME}}` is the environment only. A variable that is
 not set is an error, and errors give the file and line but never a value.
 
+`{{login.response.body.access_token}}` is a value from the response of an
+earlier request named `login`. The path after `body.` reads JSON:
+`body.data.items[0].id` for nested keys and lists, `body.$.token` as well as
+`body.token`, and `body.*` for the whole body. `headers.Name` reads a response
+header. A text value goes in as it is; numbers, objects and lists go in as
+JSON. Each round reads its own responses, and after a redirect the value comes
+from the last hop.
+
+A request that reads a value waits for the request it reads, even with `-c`;
+the others run as usual. If the value isn't there, because the earlier request
+failed or its body has no such key, the request is not sent: its row shows
+`ERR` with the variable, and it counts as failed. A value is never printed,
+though one put in a query string shows in the URL like any other. Only the
+bodies of requests that another one reads are kept, up to 16 MiB each, and
+only JSON can be read from; XML is not.
+
 `-H` and `-u` apply to every request in the file that does not set the same
 header itself. `-X` and the body flags don't go with `-f`, since each request
 has its own. `-n`, `-c` and the rest work as with URLs.
 
 These parts of the format are errors rather than skipped, since the run would
 not be the one the file describes: response handlers (`> {% ... %}`) and `>>`,
-values from an earlier response (`{{login.response.body.token}}`), generated
+values from an earlier request (`{{login.request.body.user}}`), generated
 values such as `{{$guid}}`, environment files (`http-client.env.json`), and any
 other `# @` line. Output hides credentials in headers and URLs as usual, but
 not in a query string, so keep secrets out of `?key={{API_KEY}}`.
+
+### Cookies
+
+```sh
+timeline run --cookies -f login.http
+```
+
+`--cookies` keeps the cookies that responses set, redirects included, and
+sends them with later requests to the same site, as a browser would. They last
+for the whole run, so a later round starts with the cookies of the one before.
+It is off by default, so that rounds stay the same unless you ask. The
+`Cookie` a request sent is in `request_headers` with its values hidden.
+
+With `-c` above 1, requests can overlap, so a request may go out before the
+one that sets its cookie has finished. A request that reads a value from an
+earlier response waits for it, but a cookie gives no such link.
 
 ### TLS
 

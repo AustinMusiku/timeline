@@ -29,6 +29,15 @@ func FromURLs(urls []string, d Defaults) []collect.Request {
 
 // Apply fills in what r leaves out.
 func (d Defaults) Apply(r collect.Request) collect.Request {
+	if build := r.Build; build != nil {
+		r.Build = func(rs collect.Responses) (collect.Request, error) {
+			b, err := build(rs)
+			if err != nil {
+				return b, err
+			}
+			return d.Apply(b), nil
+		}
+	}
 	if r.Method == "" {
 		r.Method = d.Method
 	}

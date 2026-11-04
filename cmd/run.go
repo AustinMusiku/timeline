@@ -34,7 +34,13 @@ Client and JetBrains share, where each request has its own method, headers and
 body. Requests are separated by ###, and # @name names one for the waterfall.
 @name = value sets a variable, and {{name}} reads it or else the environment;
 {{$processEnv NAME}} reads the environment only. An unset variable, a response
-handler, a value from an earlier response, and any other # @ line are errors.
+handler, and any other # @ line are errors.
+
+{{login.response.body.access_token}} is a value from the response of an
+earlier request named login: body.<path> reads its JSON, with a.b[0] for
+nested keys and lists and body.* for the whole body, and headers.<name> reads
+a header. A request that reads one waits for that request, even with
+--concurrency, and is not sent if the value is missing; its row shows ERR.
 --header and --user apply to the file's requests; --method and the body flags
 can't be used with it.
 
@@ -49,6 +55,10 @@ The body flags work as in curl. A body makes the request a POST unless
 --data-binary @file keeps the line breaks, and --data-raw reads no file.
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
+
+--cookies keeps the cookies that responses set and sends them with later
+requests to the same site, for the whole run. With --concurrency above 1, a
+request may go out before the one that sets its cookie has finished.
 
 --cacert trusts the certificates in a PEM file in place of the system's.
 --cert sends a client certificate, with its key from --key or from the same
@@ -120,6 +130,7 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.Bool("cookies", false, "keep the cookies responses set and send them with later requests")
 	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
 	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
 	f.String("key", "", "PEM file of the client certificate's key")
@@ -273,6 +284,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Timeout:      viper.GetDuration("timeout"),
 		MaxRedirects: viper.GetInt("max-redirects"),
 		TLS:          tlsConf,
+		Cookies:      viper.GetBool("cookies"),
 	}
 	asJSON := viper.GetBool("json")
 	var writeErr error

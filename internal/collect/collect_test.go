@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -815,5 +816,194 @@ func TestNameStaysWithTheStepNotItsHops(t *testing.T) {
 	}
 	if want := []string{"start", "", "start", ""}; !slices.Equal(names, want) {
 		t.Errorf("entries are named %q, want %q", names, want)
+	}
+}
+
+// tokens serves a login that answers with a token for each call, gzipped,
+// after a redirect, and an account page that wants the latest token.
+func tokens(t *testing.T) *httptest.Server {
+	t.Helper()
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			http.Redirect(w, r, "/token", http.StatusFound)
+		case "/token":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("X-Token", fmt.Sprint(n.Add(1)))
+			zw := gzip.NewWriter(w)
+			fmt.Fprintf(zw, `{"token": "t%d"}`, n.Load())
+			zw.Close()
+		case "/account":
+			if r.Header.Get("Authorization") != "Bearer t"+fmt.Sprint(n.Load()) {
+				w.WriteHeader(http.StatusUnauthorized)
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// account builds a request for /account from the body step 0 got.
+func account(base string) Request {
+	return Request{
+		Name: "account", Method: "GET", URL: base + "/account?{{login}}", After: []int{0},
+		Build: func(rs Responses) (Request, error) {
+			login, ok := rs[0]
+			if !ok {
+				return Request{}, errors.New("login got no response")
+			}
+			if login.BodyErr != nil {
+				return Request{}, login.BodyErr
+			}
+			var body struct{ Token string }
+			if err := json.Unmarshal(login.Body, &body); err != nil {
+				return Request{}, err
+			}
+			return Request{
+				Method: "GET", URL: base + "/account",
+				Header: http.Header{"Authorization": {"Bearer " + body.Token}},
+			}, nil
+		},
+	}
+}
+
+func TestStepIsBuiltFromAnEarlierResponse(t *testing.T) {
+	srv := tokens(t)
+	reqs := []Request{{Name: "login", URL: srv.URL + "/login", Keep: true}, account(srv.URL)}
+
+	got, err := run(t.Context(), transport(srv), reqs, Options{Repeat: 2, MaxRedirects: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []string
+	for _, e := range got.Entries {
+		status := 0
+		if e.Response != nil {
+			status = e.Response.Status
+		}
+		rows = append(rows, fmt.Sprintf("%s %d %s", e.Request.Name, status, e.Request.Header.Get("Authorization")))
+	}
+	// Each round reads its own login, from the last hop.
+	want := []string{"login 302 ", " 200 ", "account 200 Bearer t1", "login 302 ", " 200 ", "account 200 Bearer t2"}
+	if !slices.Equal(rows, want) {
+		t.Errorf("got  %q\nwant %q", rows, want)
+	}
+}
+
+func TestStepWhoseBuildFailsIsNotSent(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, "no")
+	}))
+	defer srv.Close()
+
+	reqs := []Request{{Name: "login", URL: srv.URL + "/login", Keep: true}, account(srv.URL)}
+	got, err := run(t.Context(), transport(srv), reqs, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Entries) != 2 || hits.Load() != 1 {
+		t.Fatalf("got %d entries and %d requests, want 2 entries and only the login sent", len(got.Entries), hits.Load())
+	}
+	e := got.Entries[1]
+	if e.Error == "" || e.Response != nil || e.Request.Name != "account" || e.Request.URL != srv.URL+"/account?{{login}}" {
+		t.Errorf("unbuilt step: %+v, want a failed entry labelled from the step as given", e)
+	}
+}
+
+func TestDependentStepWaitsUnderConcurrency(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			time.Sleep(100 * time.Millisecond)
+			io.WriteString(w, `{"token": "t"}`)
+		}
+	}))
+	defer srv.Close()
+
+	reqs := []Request{{Name: "login", URL: srv.URL + "/login", Keep: true}, account(srv.URL), {Name: "other", URL: srv.URL + "/other"}}
+	got, err := run(t.Context(), transport(srv), reqs, Options{Concurrency: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := map[string]record.Entry{}
+	for _, e := range got.Entries {
+		if e.Error != "" {
+			t.Fatalf("%s failed: %s", e.Request.Name, e.Error)
+		}
+		at[e.Request.Name] = e
+	}
+	login := at["login"]
+	if end := login.Offset + login.Timings.Total(); at["account"].Offset < end {
+		t.Errorf("account started at %v, before login ended at %v", at["account"].Offset, end)
+	}
+	if at["other"].Offset >= login.Offset+login.Timings.Total() {
+		t.Errorf("other waited for login, though it does not read it")
+	}
+}
+
+func TestDecode(t *testing.T) {
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	io.WriteString(zw, "hello")
+	zw.Close()
+
+	tests := []struct {
+		body     []byte
+		size     int64
+		encoding string
+		want     string
+		err      string
+	}{
+		{[]byte("plain"), 5, "", "plain", ""},
+		{gz.Bytes(), int64(gz.Len()), "gzip", "hello", ""},
+		{[]byte("not gzip"), 8, "gzip", "", "the gzip body is broken"},
+		{[]byte("abc"), maxKept + 1, "", "", "the body is over 16 MiB"},
+		{[]byte("abc"), 3, "br", "", "the body is br-encoded"},
+	}
+	for _, tc := range tests {
+		got, err := decode(tc.body, tc.size, tc.encoding)
+		if string(got) != tc.want || (err == nil) != (tc.err == "") || (err != nil && !strings.HasPrefix(err.Error(), tc.err)) {
+			t.Errorf("decode(%q, %d, %q) = %q, %v; want %q, %q", tc.body, tc.size, tc.encoding, got, err, tc.want, tc.err)
+		}
+	}
+}
+
+func TestCookiesAreKeptWhenAsked(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("Cookie"))
+		mu.Unlock()
+		if r.URL.Path == "/login" {
+			// Set on the redirect, as a login form usually does.
+			http.SetCookie(w, &http.Cookie{Name: "session", Value: "s1", Path: "/"})
+			http.Redirect(w, r, "/home", http.StatusSeeOther)
+		}
+	}))
+	defer srv.Close()
+	reqs := []Request{{URL: srv.URL + "/login"}, {URL: srv.URL + "/me"}}
+
+	got, err := run(t.Context(), transport(srv), reqs, Options{Repeat: 2, MaxRedirects: 1, Cookies: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/login ", "/home session=s1", "/me session=s1", "/login session=s1", "/home session=s1", "/me session=s1"}
+	if !slices.Equal(seen, want) {
+		t.Errorf("server saw\n%q\nwant\n%q", seen, want)
+	}
+	if c := got.Entries[2].Request.Header.Get("Cookie"); c != "session=s1" {
+		t.Errorf("the entry for /me records Cookie %q, want the one the jar added", c)
+	}
+
+	seen = nil
+	if _, err := run(t.Context(), transport(srv), reqs, Options{MaxRedirects: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/login ", "/home ", "/me "}; !slices.Equal(seen, want) {
+		t.Errorf("without Cookies the server saw %q, want %q", seen, want)
 	}
 }
