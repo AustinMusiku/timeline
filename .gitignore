@@ -4,7 +4,6 @@
 *.test
 *.out
 .envrc
-.claude/settings.local.json
-
+.claude/
 
 scratch.*
