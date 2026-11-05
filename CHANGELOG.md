@@ -2,6 +2,15 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.8.0] - 2026-11-05
+
+### Features
+
+- Build a step from earlier responses
+- Read values out of a response
+- Fill in values from earlier responses in sequence files
+- Keep cookies between requests with --cookies
+
 ## [0.7.0] - 2026-10-30
 
 ### Features
