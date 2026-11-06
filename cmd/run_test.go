@@ -76,6 +76,20 @@ func TestRunDrawsEveryRequest(t *testing.T) {
 	}
 }
 
+func TestRunDrawsWholeURLsWhenPiped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	long := srv.URL + "/a/path/far/too/long/to/fit/in/half/of/eighty/columns?and=a&query=string"
+	out, err := execute(t, "run", long)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, long) {
+		t.Errorf("the URL was shortened\n%s", out)
+	}
+}
+
 func TestRunReportsFailedRequests(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

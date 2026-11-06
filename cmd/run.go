@@ -327,8 +327,11 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return &exitError{1, writeErr}
 	}
 	if !asJSON {
-		// An interrupted run still draws what it collected.
-		if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
+		// An interrupted run still draws what it collected. Whatever reads a
+		// pipe needs the whole URL more than a short line.
+		width := termWidth(out)
+		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0}
+		if err := render.Waterfall(out, run, ropts); err != nil {
 			return &exitError{1, err}
 		}
 	}
