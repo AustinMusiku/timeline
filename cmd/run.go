@@ -298,16 +298,16 @@ func runSequence(cmd *cobra.Command, args []string) error {
 
 	run, runErr := collect.Run(ctx, reqs, opts)
 	if run == nil {
-		return runErr
+		return runErr // nothing was sent
 	}
 
 	if writeErr != nil {
-		return writeErr
+		return &exitError{1, writeErr}
 	}
 	if !asJSON {
 		// An interrupted run still draws what it collected.
 		if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
-			return err
+			return &exitError{1, err}
 		}
 	}
 	// A redirect's hops belong to the request that led to them.
@@ -321,10 +321,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if runErr != nil {
-		return fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))
+		return &exitError{1, fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))
+		return &exitError{1, fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))}
 	}
 	return nil
 }

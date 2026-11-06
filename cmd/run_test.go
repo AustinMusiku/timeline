@@ -22,6 +22,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +89,56 @@ func TestRunReportsFailedRequests(t *testing.T) {
 	}
 	if !strings.Contains(out, " ERR  ") {
 		t.Errorf("the failed request was not drawn\n%s", out)
+	}
+}
+
+func TestRunExitStatus(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := "http://" + ln.Addr().String()
+	ln.Close()
+
+	dir := t.TempDir()
+	badConfig := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(badConfig, []byte("repeat: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		args []string
+		want int
+	}{
+		{[]string{srv.URL, srv.URL + "/missing"}, 0},
+		{[]string{srv.URL, refused}, 1},
+		{[]string{"--json", refused}, 1},
+		{[]string{"--repet", "2", srv.URL}, 2},
+		{[]string{"-n", "abc", srv.URL}, 2},
+		{[]string{"--config", filepath.Join(dir, "missing.yaml"), srv.URL}, 2},
+		{[]string{"--config", badConfig, srv.URL}, 2},
+		{[]string{"-f", filepath.Join(dir, "missing.http")}, 2},
+		{[]string{srv.URL, "example.com"}, 2},
+	}
+	for _, tc := range tests {
+		before := hits.Load()
+		_, err := execute(t, append([]string{"run"}, tc.args...)...)
+		if got := exitStatus(err); got != tc.want {
+			t.Errorf("%v: exit status %d (%v), want %d", tc.args, got, err, tc.want)
+		}
+		// 2 promises that nothing was sent.
+		if sent := hits.Load() - before; tc.want == 2 && sent != 0 {
+			t.Errorf("%v: exit status 2, but the server saw %d requests", tc.args, sent)
+		}
 	}
 }
 
