@@ -50,6 +50,10 @@ more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 
 `timeline run --help` has the full reference.
 
+Flags from curl that timeline lacks, such as `-L`, `-s` and `-o`, are errors
+that say what to use instead. `--compressed` does nothing, since timeline asks
+for gzip already.
+
 ### Authentication
 
 ```sh
@@ -326,8 +330,15 @@ only. So is `-k`, so that no config file can turn certificate checks off.
 
 ## Exit status
 
-`timeline` exits 1 when any request got no response or the run was interrupted,
-and 0 otherwise. Ctrl-C still draws what was collected.
+| Status       | When                                                     |
+| ------------ | -------------------------------------------------------- |
+| `0`          | Every request got a response, 4xx and 5xx included       |
+| `1`          | A request failed, with the reason under its row and in its JSON `error` |
+| `2`          | A flag, argument or file was wrong, so nothing was sent  |
+| `130`, `143` | Ctrl-C or `SIGTERM` stopped the run                      |
+
+An interrupted run still draws what it collected, and with `--json` those
+lines are already written.
 
 ## Development
 

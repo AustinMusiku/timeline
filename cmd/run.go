@@ -56,6 +56,8 @@ The body flags work as in curl. A body makes the request a POST unless
 --data-binary @file keeps the line breaks, and --data-raw reads no file.
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
+--compressed does nothing, since timeline asks for gzip already. Other curl
+flags it lacks, such as -L, -s and -o, are errors that say what to use instead.
 
 --cookies keeps the cookies that responses set and sends them with later
 requests to the same site, for the whole run. With --concurrency above 1, a
@@ -97,7 +99,12 @@ that never got one. reused means the connection was already open, and
 tls_resumed that the handshake which opened it resumed an earlier session.
 resolved_ips and dial_attempts describe the request's own dial, so they are
 empty and 0 on a reused connection. attempts above 1 means the request was
-retried.`,
+retried.
+
+The exit status is 0 when every request got a response, 4xx and 5xx included,
+and 1 when any failed. It is 2 when a flag, argument or file was wrong, and
+then nothing was sent. 130 and 143 mean Ctrl-C or SIGTERM stopped the run; it
+still draws what it collected.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
   timeline run --concurrency 4 https://example.com/a https://example.com/b
