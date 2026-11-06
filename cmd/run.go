@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -275,8 +276,18 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancelCause(cmd.Context())
+	defer cancel(nil)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	go func() {
+		select {
+		case s := <-sigs:
+			cancel(interrupt{s})
+		case <-ctx.Done():
+		}
+	}()
 
 	opts := collect.Options{
 		Repeat:       repeat,
@@ -321,12 +332,29 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if runErr != nil {
-		return &exitError{1, fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))}
+		status := 1
+		if i, ok := context.Cause(ctx).(interrupt); ok {
+			status = signalStatus(i.sig)
+		}
+		return &exitError{status, fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))}
 	}
 	if failed > 0 {
 		return &exitError{1, fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))}
 	}
 	return nil
+}
+
+// interrupt is the cause of a run stopped by a signal.
+type interrupt struct{ sig os.Signal }
+
+func (interrupt) Error() string { return "interrupted" }
+
+// signalStatus is the shell's status for a process killed by sig.
+func signalStatus(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
 }
 
 // askPassword reads a password from the terminal without echoing it.
@@ -345,10 +373,10 @@ var askPassword = func(user string) (string, error) {
 	defer func() { signal.Stop(sigs); close(done) }()
 	go func() {
 		select {
-		case <-sigs:
+		case s := <-sigs:
 			term.Restore(fd, state)
 			fmt.Fprintln(os.Stderr)
-			os.Exit(130)
+			os.Exit(signalStatus(s))
 		case <-done:
 		}
 	}()

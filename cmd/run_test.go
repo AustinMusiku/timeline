@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -139,6 +140,23 @@ func TestRunExitStatus(t *testing.T) {
 		if sent := hits.Load() - before; tc.want == 2 && sent != 0 {
 			t.Errorf("%v: exit status 2, but the server saw %d requests", tc.args, sent)
 		}
+	}
+}
+
+func TestRunExitsWithTheSignalThatStoppedIt(t *testing.T) {
+	// The run is listening for signals while a request is in flight.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", srv.URL, srv.URL)
+	if got := exitStatus(err); got != 143 {
+		t.Errorf("exit status %d (%v), want 143", got, err)
+	}
+	if !strings.Contains(out, " ERR  ") {
+		t.Errorf("the interrupted request was not drawn\n%s", out)
 	}
 }
 
