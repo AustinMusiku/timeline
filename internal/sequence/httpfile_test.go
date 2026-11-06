@@ -268,9 +268,14 @@ Authorization: Bearer {{token}}
 	denied := &collect.Response{Status: 401, Header: http.Header{}, Body: []byte(`{"error": "secret"}`)}
 	_, err = reqs[1].Build(collect.Responses{0: denied})
 	// The URL is filled in first, so its value is the one missed.
-	if err == nil || err.Error() != "{{login.response.body.$.user.id}}: the body has no user" {
-		t.Errorf("with a 401: error %v, want the body has no user", err)
+	if want := "{{login.response.body.$.user.id}}: login got 401 and the body has no user"; err == nil || err.Error() != want {
+		t.Errorf("with a 401: error %v, want %s", err, want)
 	} else if strings.Contains(err.Error(), "secret") {
 		t.Errorf("error %q gives the body away", err)
+	}
+	// A 2xx without the value is not blamed on its status.
+	_, err = reqs[1].Build(collect.Responses{0: {Status: 200, Header: http.Header{}, Body: []byte(`{}`)}})
+	if want := "{{login.response.body.$.user.id}}: the body has no user"; err == nil || err.Error() != want {
+		t.Errorf("with a 200: error %v, want %s", err, want)
 	}
 }

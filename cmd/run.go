@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -55,6 +56,8 @@ The body flags work as in curl. A body makes the request a POST unless
 --data-binary @file keeps the line breaks, and --data-raw reads no file.
 Several body flags are joined with &, in the order given. A 307 or 308 redirect
 sends the body on; a 301, 302 or 303 turns the request into a GET without it.
+--compressed does nothing, since timeline asks for gzip already. Other curl
+flags it lacks, such as -L, -s and -o, are errors that say what to use instead.
 
 --cookies keeps the cookies that responses set and sends them with later
 requests to the same site, for the whole run. With --concurrency above 1, a
@@ -96,7 +99,12 @@ that never got one. reused means the connection was already open, and
 tls_resumed that the handshake which opened it resumed an earlier session.
 resolved_ips and dial_attempts describe the request's own dial, so they are
 empty and 0 on a reused connection. attempts above 1 means the request was
-retried.`,
+retried.
+
+The exit status is 0 when every request got a response, 4xx and 5xx included,
+and 1 when any failed. It is 2 when a flag, argument or file was wrong, and
+then nothing was sent. 130 and 143 mean Ctrl-C or SIGTERM stopped the run; it
+still draws what it collected.`,
 	Example: `  timeline run https://example.com https://example.com/about
   timeline run --repeat 3 https://api.example.com/health
   timeline run --concurrency 4 https://example.com/a https://example.com/b
@@ -148,6 +156,10 @@ func init() {
 
 	// Command line only, so no config file makes every run read a file.
 	f.StringP("file", "f", "", "read the sequence from a .http file, - for stdin")
+
+	// Copy as cURL adds it, and gzip is offered already.
+	f.Bool("compressed", false, "does nothing; timeline asks for gzip already")
+	f.MarkHidden("compressed")
 }
 
 // defaults reads the flags that apply to every request.
@@ -236,7 +248,7 @@ func requests(f *pflag.FlagSet, urls []string, stdin io.Reader) ([]collect.Reque
 	} else {
 		var r *os.File
 		if r, err = os.Open(file); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("--file: %w", err)
 		}
 		defer r.Close()
 		reqs, err = sequence.ParseHTTP(r, file, filepath.Dir(file), os.LookupEnv)
@@ -275,8 +287,18 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancelCause(cmd.Context())
+	defer cancel(nil)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigs)
+	go func() {
+		select {
+		case s := <-sigs:
+			cancel(interrupt{s})
+		case <-ctx.Done():
+		}
+	}()
 
 	opts := collect.Options{
 		Repeat:       repeat,
@@ -298,16 +320,16 @@ func runSequence(cmd *cobra.Command, args []string) error {
 
 	run, runErr := collect.Run(ctx, reqs, opts)
 	if run == nil {
-		return runErr
+		return runErr // nothing was sent
 	}
 
 	if writeErr != nil {
-		return writeErr
+		return &exitError{1, writeErr}
 	}
 	if !asJSON {
 		// An interrupted run still draws what it collected.
 		if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
-			return err
+			return &exitError{1, err}
 		}
 	}
 	// A redirect's hops belong to the request that led to them.
@@ -321,12 +343,29 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if runErr != nil {
-		return fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))
+		status := 1
+		if i, ok := context.Cause(ctx).(interrupt); ok {
+			status = signalStatus(i.sig)
+		}
+		return &exitError{status, fmt.Errorf("interrupted after sending %d of %d requests", sent, repeat*len(reqs))}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))
+		return &exitError{1, fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))}
 	}
 	return nil
+}
+
+// interrupt is the cause of a run stopped by a signal.
+type interrupt struct{ sig os.Signal }
+
+func (interrupt) Error() string { return "interrupted" }
+
+// signalStatus is the shell's status for a process killed by sig.
+func signalStatus(sig os.Signal) int {
+	if s, ok := sig.(syscall.Signal); ok {
+		return 128 + int(s)
+	}
+	return 1
 }
 
 // askPassword reads a password from the terminal without echoing it.
@@ -345,10 +384,10 @@ var askPassword = func(user string) (string, error) {
 	defer func() { signal.Stop(sigs); close(done) }()
 	go func() {
 		select {
-		case <-sigs:
+		case s := <-sigs:
 			term.Restore(fd, state)
 			fmt.Fprintln(os.Stderr)
-			os.Exit(130)
+			os.Exit(signalStatus(s))
 		case <-done:
 		}
 	}()

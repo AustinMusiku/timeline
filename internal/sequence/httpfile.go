@@ -449,7 +449,11 @@ func fill(tmpl collect.Request, rawBody bool, indexes map[string]int, rs collect
 				return m
 			}
 			v, verr := r.path.value(resp)
-			if verr != nil {
+			switch {
+			case verr != nil && resp.Status >= 400:
+				// The error status is the likely reason.
+				err = fmt.Errorf("{{%s}}: %s got %d and %v", text, r.step, resp.Status, verr)
+			case verr != nil:
 				err = fmt.Errorf("{{%s}}: %v", text, verr)
 			}
 			return v

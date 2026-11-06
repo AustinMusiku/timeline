@@ -389,8 +389,8 @@ func TestTimeoutLandsInThePhaseItInterrupted(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := got.Entries[0]
-	if e.Error == "" || e.Response != nil {
-		t.Fatalf("error %q, response %v; want an error and no response", e.Error, e.Response)
+	if e.Error != "timed out after 200ms" || e.Response != nil {
+		t.Fatalf("error %q, response %v; want timed out after 200ms and no response", e.Error, e.Response)
 	}
 	if e.Timings.Total() < timeout || e.Timings.Wait < timeout/2 {
 		t.Errorf("timings %+v, want nearly all of %v spent in Wait", e.Timings, timeout)
@@ -603,20 +603,21 @@ func TestOnEntrySeesEachEntryAsItFinishes(t *testing.T) {
 }
 
 func TestCancelReturnsWhatWasCollected(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
+	ctx, cancel := context.WithCancelCause(t.Context())
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		cancel()
+		cancel(errors.New("stopped by the test"))
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
 	u := Request{URL: srv.URL}
-	got, err := run(ctx, transport(srv), []Request{u, u, u}, Options{})
+	got, err := run(ctx, transport(srv), []Request{u, u, u}, Options{Timeout: time.Minute})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error %v, want context.Canceled", err)
 	}
-	if len(got.Entries) != 1 || got.Entries[0].Error == "" {
-		t.Errorf("got %d entries, want only the interrupted one, marked failed: %+v", len(got.Entries), got.Entries)
+	// The cancel's cause, not the request's own timeout, is the reason.
+	if len(got.Entries) != 1 || got.Entries[0].Error != "stopped by the test" {
+		t.Errorf("got %d entries, want only the interrupted one, failed with the cause: %+v", len(got.Entries), got.Entries)
 	}
 }
 
@@ -638,6 +639,19 @@ func TestRejectsASequenceItCannotSend(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "secret") {
 			t.Errorf("%+v: error %q gives the password away", r, err)
+		}
+	}
+
+	for url, want := range map[string]string{
+		"example.com":           `"example.com" needs http:// or https:// in front`,
+		"localhost:8080/health": `"localhost:8080/health" needs http:// or https:// in front`,
+		"http:/example.com":     `"http:/example.com" has no host`,
+		"http:///path":          `"http:///path" has no host`,
+		"ftp://example.com":     `"ftp://example.com" is not an http or https URL`,
+	} {
+		_, err := Run(t.Context(), []Request{{URL: url}}, Options{})
+		if err == nil || err.Error() != "request 1: "+want {
+			t.Errorf("%s: error %v, want request 1: %s", url, err, want)
 		}
 	}
 }

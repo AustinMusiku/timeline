@@ -22,6 +22,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -88,6 +90,76 @@ func TestRunReportsFailedRequests(t *testing.T) {
 	}
 	if !strings.Contains(out, " ERR  ") {
 		t.Errorf("the failed request was not drawn\n%s", out)
+	}
+}
+
+func TestRunExitStatus(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := "http://" + ln.Addr().String()
+	ln.Close()
+
+	dir := t.TempDir()
+	badConfig := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(badConfig, []byte("repeat: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		args []string
+		want int
+	}{
+		{[]string{srv.URL, srv.URL + "/missing"}, 0},
+		{[]string{srv.URL, refused}, 1},
+		{[]string{"--json", refused}, 1},
+		{[]string{"--repet", "2", srv.URL}, 2},
+		{[]string{"-n", "abc", srv.URL}, 2},
+		{[]string{"--config", filepath.Join(dir, "missing.yaml"), srv.URL}, 2},
+		{[]string{"--config", badConfig, srv.URL}, 2},
+		{[]string{"-f", filepath.Join(dir, "missing.http")}, 2},
+		{[]string{srv.URL, "example.com"}, 2},
+	}
+	for _, tc := range tests {
+		before := hits.Load()
+		_, err := execute(t, append([]string{"run"}, tc.args...)...)
+		if got := exitStatus(err); got != tc.want {
+			t.Errorf("%v: exit status %d (%v), want %d", tc.args, got, err, tc.want)
+		}
+		// 2 promises that nothing was sent.
+		if sent := hits.Load() - before; tc.want == 2 && sent != 0 {
+			t.Errorf("%v: exit status 2, but the server saw %d requests", tc.args, sent)
+		}
+	}
+}
+
+func TestRunExitsWithTheSignalThatStoppedIt(t *testing.T) {
+	// The run is listening for signals while a request is in flight.
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", srv.URL, srv.URL)
+	if got := exitStatus(err); got != 143 {
+		t.Errorf("exit status %d (%v), want 143", got, err)
+	}
+	if !strings.Contains(out, " ERR  ") || !strings.Contains(out, "interrupted\n") {
+		t.Errorf("the interrupted request was not drawn as interrupted\n%s", out)
+	}
+	if err == nil || err.Error() != "interrupted after sending 1 of 2 requests" {
+		t.Errorf("error %v, want interrupted after sending 1 of 2 requests", err)
 	}
 }
 
@@ -418,6 +490,68 @@ func TestRunRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestRunSaysWhatAFlagWants(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-n", "abc"}, `--repeat wants a whole number, not "abc"`},
+		{[]string{"--concurrency=1.5"}, `--concurrency wants a whole number, not "1.5"`},
+		{[]string{"--timeout", "5"}, `--timeout wants a duration such as 5s or 500ms, not "5"`},
+		{[]string{"--json=maybe"}, `--json wants true or false, not "maybe"`},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%v: error %v, want %s", tc.args, err, tc.want)
+		}
+	}
+}
+
+func TestRunAnswersCurlOnlyFlags(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-L"}, "unknown flag -L: timeline already follows redirects, up to --max-redirects"},
+		{[]string{"--location"}, "unknown flag --location: timeline already follows redirects, up to --max-redirects"},
+		{[]string{"-sS"}, "unknown flag -s: timeline has no progress meter, and always shows errors"},
+		{[]string{"-o", "/dev/null"}, "unknown flag -o: timeline never prints the body"},
+		{[]string{"--max-time", "5"}, "unknown flag --max-time: --timeout sets the time limit for each request"},
+		{[]string{"--nope"}, "unknown flag: --nope"},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || err.Error() != tc.want || exitStatus(err) != 2 {
+			t.Errorf("%v: error %v (status %d), want %s (status 2)", tc.args, err, exitStatus(err), tc.want)
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	if out, err := execute(t, "run", "--compressed", srv.URL); err != nil {
+		t.Errorf("--compressed: %v\n%s", err, out)
+	}
+}
+
+func TestRunNamesTheFlagOfAFileItCannotRead(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-d", "@" + missing}, "--data: open " + missing},
+		{[]string{"--data-binary", "@" + missing}, "--data-binary: open " + missing},
+		{[]string{"--config", missing}, "--config: open " + missing},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%v: error %v, want it to start %q", tc.args, err, tc.want)
+		}
+	}
+}
+
 func TestRunInsecureSkipsTheCertificateCheck(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -623,7 +757,7 @@ func TestRunRejectsBadSequences(t *testing.T) {
 		{[]string{"-f", file, "-d", "a=1"}, "a body flag can't be used with --file"},
 		{[]string{"-f", file, "--data-raw", "a=1"}, "a body flag can't be used with --file"},
 		{[]string{"-f", empty}, "no requests in " + empty},
-		{[]string{"-f", filepath.Join(t.TempDir(), "missing.http")}, "open "},
+		{[]string{"-f", filepath.Join(t.TempDir(), "missing.http")}, "--file: open "},
 		{[]string{"-f", broken}, broken + ":2: @no-redirect is not supported"},
 	}
 	for _, tc := range tests {
@@ -687,7 +821,7 @@ func TestRunUsesAValueFromAnEarlierResponse(t *testing.T) {
 	if err == nil || err.Error() != "1 of 2 requests failed" {
 		t.Errorf("error %v, want 1 of 2 requests failed", err)
 	}
-	for _, want := range []string{" 2  ERR  ", "{{login.response.body.access_token}}: the body is not JSON"} {
+	for _, want := range []string{" 2  ERR  ", "{{login.response.body.access_token}}: login got 500 and the body is not JSON"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q\n%s", want, out)
 		}
