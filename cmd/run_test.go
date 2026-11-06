@@ -795,7 +795,7 @@ func TestRunUsesAValueFromAnEarlierResponse(t *testing.T) {
 	if err == nil || err.Error() != "1 of 2 requests failed" {
 		t.Errorf("error %v, want 1 of 2 requests failed", err)
 	}
-	for _, want := range []string{" 2  ERR  ", "{{login.response.body.access_token}}: the body is not JSON"} {
+	for _, want := range []string{" 2  ERR  ", "{{login.response.body.access_token}}: login got 500 and the body is not JSON"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q\n%s", want, out)
 		}
