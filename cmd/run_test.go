@@ -90,6 +90,31 @@ func TestRunDrawsWholeURLsWhenPiped(t *testing.T) {
 	}
 }
 
+func TestRunSumsUpRounds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	out, err := execute(t, "run", "-n", "3", srv.URL)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"\n    round 1  ", "\n    median 2–3  "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the summary has no line starting %q\n%s", want, out)
+		}
+	}
+
+	for _, args := range [][]string{{"run", srv.URL}, {"run", "-n", "3", "--json", srv.URL}} {
+		out, err := execute(t, args...)
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, out)
+		}
+		if strings.Contains(out, "round 1") {
+			t.Errorf("%v wrote a summary\n%s", args, out)
+		}
+	}
+}
+
 func TestRunReportsFailedRequests(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

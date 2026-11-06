@@ -334,6 +334,9 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		if err := render.Waterfall(out, run, ropts); err != nil {
 			return &exitError{1, err}
 		}
+		if err := render.Summary(out, run, ropts); err != nil {
+			return &exitError{1, err}
+		}
 	}
 	// A redirect's hops belong to the request that led to them.
 	sent, failed := 0, 0
