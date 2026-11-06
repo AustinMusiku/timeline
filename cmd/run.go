@@ -149,6 +149,10 @@ func init() {
 
 	// Command line only, so no config file makes every run read a file.
 	f.StringP("file", "f", "", "read the sequence from a .http file, - for stdin")
+
+	// Copy as cURL adds it, and gzip is offered already.
+	f.Bool("compressed", false, "does nothing; timeline asks for gzip already")
+	f.MarkHidden("compressed")
 }
 
 // defaults reads the flags that apply to every request.

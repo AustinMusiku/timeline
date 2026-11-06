@@ -508,6 +508,32 @@ func TestRunSaysWhatAFlagWants(t *testing.T) {
 	}
 }
 
+func TestRunAnswersCurlOnlyFlags(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-L"}, "unknown flag -L: timeline already follows redirects, up to --max-redirects"},
+		{[]string{"--location"}, "unknown flag --location: timeline already follows redirects, up to --max-redirects"},
+		{[]string{"-sS"}, "unknown flag -s: timeline has no progress meter, and always shows errors"},
+		{[]string{"-o", "/dev/null"}, "unknown flag -o: timeline never prints the body"},
+		{[]string{"--max-time", "5"}, "unknown flag --max-time: --timeout sets the time limit for each request"},
+		{[]string{"--nope"}, "unknown flag: --nope"},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || err.Error() != tc.want || exitStatus(err) != 2 {
+			t.Errorf("%v: error %v (status %d), want %s (status 2)", tc.args, err, exitStatus(err), tc.want)
+		}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	if out, err := execute(t, "run", "--compressed", srv.URL); err != nil {
+		t.Errorf("--compressed: %v\n%s", err, out)
+	}
+}
+
 func TestRunNamesTheFlagOfAFileItCannotRead(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
 	tests := []struct {
