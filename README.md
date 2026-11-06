@@ -358,6 +358,17 @@ only. So is `-k`, so that no config file can turn certificate checks off.
 An interrupted run still draws what it collected, and with `--json` those
 lines are already written.
 
+## For AI agents
+
+[`skills/timeline/SKILL.md`](skills/timeline/SKILL.md) tells an agent when
+to reach for timeline and how to read what it prints. For Claude Code, put it
+in your skills:
+
+```sh
+mkdir -p ~/.claude/skills/timeline
+curl -fsSL -o ~/.claude/skills/timeline/SKILL.md https://raw.githubusercontent.com/AustinMusiku/timeline/master/skills/timeline/SKILL.md
+```
+
 ## Development
 
 ```sh
