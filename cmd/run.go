@@ -237,7 +237,7 @@ func requests(f *pflag.FlagSet, urls []string, stdin io.Reader) ([]collect.Reque
 	} else {
 		var r *os.File
 		if r, err = os.Open(file); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("--file: %w", err)
 		}
 		defer r.Close()
 		reqs, err = sequence.ParseHTTP(r, file, filepath.Dir(file), os.LookupEnv)

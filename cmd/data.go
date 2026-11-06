@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -15,6 +16,10 @@ const (
 	dataRaw                    // no @file
 	dataBinary                 // @file as it is
 )
+
+func (k dataKind) String() string {
+	return [...]string{"--data", "--data-raw", "--data-binary"}[k]
+}
 
 // dataPart is one value of a body flag.
 type dataPart struct {
@@ -72,7 +77,7 @@ func body(parts []dataPart, stdin io.Reader) ([]byte, error) {
 		}
 		b, err := readData(name, stdin)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%v: %w", p.kind, err)
 		}
 		if p.kind == data {
 			b = []byte(strings.NewReplacer("\r", "", "\n", "").Replace(string(b)))

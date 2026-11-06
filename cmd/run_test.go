@@ -508,6 +508,24 @@ func TestRunSaysWhatAFlagWants(t *testing.T) {
 	}
 }
 
+func TestRunNamesTheFlagOfAFileItCannotRead(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-d", "@" + missing}, "--data: open " + missing},
+		{[]string{"--data-binary", "@" + missing}, "--data-binary: open " + missing},
+		{[]string{"--config", missing}, "--config: open " + missing},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%v: error %v, want it to start %q", tc.args, err, tc.want)
+		}
+	}
+}
+
 func TestRunInsecureSkipsTheCertificateCheck(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
@@ -713,7 +731,7 @@ func TestRunRejectsBadSequences(t *testing.T) {
 		{[]string{"-f", file, "-d", "a=1"}, "a body flag can't be used with --file"},
 		{[]string{"-f", file, "--data-raw", "a=1"}, "a body flag can't be used with --file"},
 		{[]string{"-f", empty}, "no requests in " + empty},
-		{[]string{"-f", filepath.Join(t.TempDir(), "missing.http")}, "open "},
+		{[]string{"-f", filepath.Join(t.TempDir(), "missing.http")}, "--file: open "},
 		{[]string{"-f", broken}, broken + ":2: @no-redirect is not supported"},
 	}
 	for _, tc := range tests {

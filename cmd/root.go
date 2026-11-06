@@ -83,7 +83,11 @@ func initConfig() {
 	configErr = nil
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := errors.AsType[viper.ConfigFileNotFoundError](err); !ok {
-			configErr = err
+			from := viper.ConfigFileUsed()
+			if cfgFile != "" {
+				from = "--config"
+			}
+			configErr = fmt.Errorf("%s: %w", from, err)
 		}
 	}
 }
