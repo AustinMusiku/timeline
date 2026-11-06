@@ -219,11 +219,29 @@ started and is made of these phases, in order:
 | receive | `r`    | blue    | First byte to the end of the body                |
 
 In a terminal the bars are coloured blocks. Piped, or with `--color never`,
-they are the letters above.
+they are the letters above. Piped, URLs are also never shortened, however long
+the lines get.
 
 A blank line separates rounds of `--repeat`. Connections stay open between
 rounds, so the first round is cold and the rest are warm: a warm request has no
 dns, connect or tls.
+
+With `--repeat` above 1, a table under the chart sets each request's first
+round beside the median of the rest, phase by phase:
+
+```
+                 total  blocked   dns  connect    tls  send   wait  receive
+ 1  https://go.dev/nope
+    round 1      745ms        -  60ms    150ms  220ms     -  300ms     15ms
+    median 2–5   312ms        -     -        -      -     -  300ms     12ms
+ 2  http://nosuch.invalid
+    round 1     failed
+    rounds 2–5  failed
+```
+
+A `-` is a phase that took under 0.05ms. Failed rounds are left out of the
+median, and the line ends with how many there were, such as `(1 of 4 failed)`.
+Each column is its own median, so the phases need not add up to the total.
 
 Connections are numbered in the order the run first used them, and listed under
 the chart with their address, protocol and TLS version. Rows with the same `#`

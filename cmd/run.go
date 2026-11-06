@@ -73,6 +73,11 @@ with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
 chart, so rows with the same tag shared one.
 
+With --repeat above 1, a table under the chart sets each request's first round
+beside the median of its later rounds, phase by phase. Failed rounds are left
+out of the median, and the line says how many there were. Piped, the URLs are
+never shortened, however long the lines get.
+
 Redirects are followed, up to --max-redirects from each request. Every hop is
 a request of its own, drawn on a row under the one that led to it. A redirect
 left unfollowed at the limit counts as a failed request.
