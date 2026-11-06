@@ -15,6 +15,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -304,6 +305,9 @@ func newRequest(r Request) (*http.Request, error) {
 		return nil, err
 	}
 	if (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
+		if !strings.Contains(r.URL, "://") {
+			return nil, fmt.Errorf("%q needs http:// or https:// in front", req.URL.Redacted())
+		}
 		return nil, fmt.Errorf("%q is not an http or https URL", req.URL.Redacted())
 	}
 	if r.Header != nil {

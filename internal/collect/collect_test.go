@@ -641,6 +641,11 @@ func TestRejectsASequenceItCannotSend(t *testing.T) {
 			t.Errorf("%+v: error %q gives the password away", r, err)
 		}
 	}
+
+	_, err := Run(t.Context(), []Request{{URL: "localhost:8080/health"}}, Options{})
+	if want := `request 1: "localhost:8080/health" needs http:// or https:// in front`; err == nil || err.Error() != want {
+		t.Errorf("error %v, want %s", err, want)
+	}
 }
 
 func TestBodyIsSentWithEverySend(t *testing.T) {
