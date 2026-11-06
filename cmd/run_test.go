@@ -490,6 +490,24 @@ func TestRunRejectsBadInput(t *testing.T) {
 	}
 }
 
+func TestRunSaysWhatAFlagWants(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"-n", "abc"}, `--repeat wants a whole number, not "abc"`},
+		{[]string{"--concurrency=1.5"}, `--concurrency wants a whole number, not "1.5"`},
+		{[]string{"--timeout", "5"}, `--timeout wants a duration such as 5s or 500ms, not "5"`},
+		{[]string{"--json=maybe"}, `--json wants true or false, not "maybe"`},
+	}
+	for _, tc := range tests {
+		_, err := execute(t, append(append([]string{"run"}, tc.args...), "http://example.com")...)
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%v: error %v, want %s", tc.args, err, tc.want)
+		}
+	}
+}
+
 func TestRunInsecureSkipsTheCertificateCheck(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()
