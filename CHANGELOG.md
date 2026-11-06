@@ -2,6 +2,23 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.9.0] - 2026-11-06
+
+### Breaking
+
+- Exit 2 when nothing was sent. A bad flag, argument or config file used to exit 1.
+- Exit 130 or 143 when interrupted
+- Answer curl-only flags with what timeline does instead
+
+### Fixes
+
+- Say a request timed out or was interrupted
+- Say what a flag wants when its value is wrong
+- Name the flag when its file can't be read
+- Give the earlier request's status when a value is missing
+- Say a URL needs http:// or https:// in front
+- Say a URL has no host instead of no scheme
+
 ## [0.8.0] - 2026-11-05
 
 ### Features
