@@ -222,7 +222,7 @@ func build(ctx context.Context, r Request, got []*Response, done []chan struct{}
 		select {
 		case <-done[i]:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, context.Cause(ctx)
 		}
 		if got[i] != nil {
 			earlier[i] = got[i]
@@ -324,14 +324,15 @@ func newRequest(r Request) (*http.Request, error) {
 // do sends one request and reads its body to the end. With keep, it also
 // returns what the request got.
 func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time, keep bool) (record.Entry, *Response) {
+	reqCtx := ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		reqCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
 	m := marks{seen: seen}
-	req := tmpl.Clone(httptrace.WithClientTrace(ctx, m.trace()))
+	req := tmpl.Clone(httptrace.WithClientTrace(reqCtx, m.trace()))
 	// Clones share a body, so each send reads its own copy.
 	if tmpl.GetBody != nil {
 		req.Body, _ = tmpl.GetBody()
@@ -365,15 +366,26 @@ func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Reques
 		}
 	}
 	if err != nil {
-		// The entry already has the method and URL the client adds.
-		var uerr *url.Error
-		if errors.As(err, &uerr) {
-			err = uerr.Err
-		}
-		e.Error = err.Error()
+		e.Error = failure(ctx, reqCtx, timeout, err)
 	}
 	m.finish(&e)
 	return e, kept
+}
+
+// failure says why a request sent under ctx, with its own reqCtx, failed.
+func failure(ctx, reqCtx context.Context, timeout time.Duration, err error) string {
+	switch {
+	case ctx.Err() != nil:
+		return context.Cause(ctx).Error()
+	case reqCtx.Err() != nil:
+		return fmt.Sprintf("timed out after %v", timeout)
+	}
+	// The entry already has the method and URL the client adds.
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		err = uerr.Err
+	}
+	return err.Error()
 }
 
 // capped writes to buf until it holds n bytes, then drops the rest.

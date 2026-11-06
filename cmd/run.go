@@ -336,7 +336,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		if i, ok := context.Cause(ctx).(interrupt); ok {
 			status = signalStatus(i.sig)
 		}
-		return &exitError{status, fmt.Errorf("interrupted after %d of %d requests", sent, repeat*len(reqs))}
+		return &exitError{status, fmt.Errorf("interrupted after sending %d of %d requests", sent, repeat*len(reqs))}
 	}
 	if failed > 0 {
 		return &exitError{1, fmt.Errorf("%d of %d requests failed", failed, len(run.Entries))}

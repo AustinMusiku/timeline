@@ -155,8 +155,11 @@ func TestRunExitsWithTheSignalThatStoppedIt(t *testing.T) {
 	if got := exitStatus(err); got != 143 {
 		t.Errorf("exit status %d (%v), want 143", got, err)
 	}
-	if !strings.Contains(out, " ERR  ") {
-		t.Errorf("the interrupted request was not drawn\n%s", out)
+	if !strings.Contains(out, " ERR  ") || !strings.Contains(out, "interrupted\n") {
+		t.Errorf("the interrupted request was not drawn as interrupted\n%s", out)
+	}
+	if err == nil || err.Error() != "interrupted after sending 1 of 2 requests" {
+		t.Errorf("error %v, want interrupted after sending 1 of 2 requests", err)
 	}
 }
 
