@@ -15,7 +15,6 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -304,11 +303,16 @@ func newRequest(r Request) (*http.Request, error) {
 		}
 		return nil, err
 	}
-	if (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
-		if !strings.Contains(r.URL, "://") {
-			return nil, fmt.Errorf("%q needs http:// or https:// in front", req.URL.Redacted())
+	switch u := req.URL; {
+	case u.Scheme == "http" || u.Scheme == "https":
+		if u.Host == "" {
+			return nil, fmt.Errorf("%q has no host", u.Redacted())
 		}
-		return nil, fmt.Errorf("%q is not an http or https URL", req.URL.Redacted())
+	case u.Scheme == "" || u.Opaque != "":
+		// example.com, or localhost:8080 with localhost read as the scheme
+		return nil, fmt.Errorf("%q needs http:// or https:// in front", u.Redacted())
+	default:
+		return nil, fmt.Errorf("%q is not an http or https URL", u.Redacted())
 	}
 	if r.Header != nil {
 		req.Header = r.Header.Clone()

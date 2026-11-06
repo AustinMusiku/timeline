@@ -642,9 +642,17 @@ func TestRejectsASequenceItCannotSend(t *testing.T) {
 		}
 	}
 
-	_, err := Run(t.Context(), []Request{{URL: "localhost:8080/health"}}, Options{})
-	if want := `request 1: "localhost:8080/health" needs http:// or https:// in front`; err == nil || err.Error() != want {
-		t.Errorf("error %v, want %s", err, want)
+	for url, want := range map[string]string{
+		"example.com":           `"example.com" needs http:// or https:// in front`,
+		"localhost:8080/health": `"localhost:8080/health" needs http:// or https:// in front`,
+		"http:/example.com":     `"http:/example.com" has no host`,
+		"http:///path":          `"http:///path" has no host`,
+		"ftp://example.com":     `"ftp://example.com" is not an http or https URL`,
+	} {
+		_, err := Run(t.Context(), []Request{{URL: url}}, Options{})
+		if err == nil || err.Error() != "request 1: "+want {
+			t.Errorf("%s: error %v, want request 1: %s", url, err, want)
+		}
 	}
 }
 
