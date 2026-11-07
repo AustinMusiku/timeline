@@ -2,6 +2,13 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.10.0] - 2026-11-07
+
+### Features
+
+- Draw whole URLs when the output is piped
+- Sum up the rounds under the chart
+
 ## [0.9.0] - 2026-11-06
 
 ### Breaking
