@@ -135,6 +135,25 @@ func TestWaterfallColor(t *testing.T) {
 	}
 }
 
+func TestFullLabelsKeepTheBarsAsWide(t *testing.T) {
+	clipped := draw(t, sample(), Options{Width: 60})
+	full := draw(t, sample(), Options{Width: 60, FullLabels: true})
+
+	for _, want := range []string{
+		" 1  200  #1  https://api.example.com/v1/users  ",
+		" 2  201  #1  POST https://api.example.com/v1/sessions  ",
+	} {
+		if !strings.Contains(full, want) {
+			t.Errorf("no row has %q\n%s", want, full)
+		}
+	}
+	// The ruler is the second line, and only its indent changes.
+	ruler := func(s string) string { return strings.TrimLeft(strings.Split(s, "\n")[1], " ") }
+	if got, want := ruler(full), ruler(clipped); got != want {
+		t.Errorf("full labels changed the ruler:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestConnectionsAreListed(t *testing.T) {
 	req := record.Request{Method: "GET", URL: "https://example.com"}
 	entry := func(proto string, c record.Conn) record.Entry {

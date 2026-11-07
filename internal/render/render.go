@@ -21,6 +21,9 @@ type Options struct {
 	Width int
 	// Color draws the bars as coloured blocks instead of letters.
 	Color bool
+	// FullLabels never shortens a label, however long the rows get. The bars
+	// stay as wide as Width would make them.
+	FullLabels bool
 }
 
 // SGR foreground codes; adding 10 gives the background. Red is for failures.
@@ -78,13 +81,7 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	for i, e := range run.Entries {
 		span = max(span, e.Offset+e.Timings.Total())
 		seqW = max(seqW, len(strconv.Itoa(e.Seq+1)))
-		labels[i] = e.Request.Name
-		if labels[i] == "" {
-			labels[i] = redactURL(e.Request.URL)
-			if e.Request.Method != http.MethodGet {
-				labels[i] = e.Request.Method + " " + labels[i]
-			}
-		}
+		labels[i] = label(e.Request)
 		if e.Hop > 0 {
 			labels[i] = "↳ " + labels[i]
 		}
@@ -103,8 +100,12 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 		lead += connW + 2
 	}
 	fixed := lead + 2 + totalW + 2
-	labelW = max(min(labelW, (width-fixed)/2), minLabelW)
-	cols := max(width-fixed-labelW, minCols)
+	fit := max(min(labelW, (width-fixed)/2), minLabelW)
+	cols := max(width-fixed-fit, minCols)
+	labelW = max(labelW, fit)
+	if !opts.FullLabels {
+		labelW = fit
+	}
 	perCol := float64(span) / float64(cols)
 
 	var b strings.Builder
@@ -182,6 +183,18 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// label names a request by its name, or else by its method and URL.
+func label(r record.Request) string {
+	if r.Name != "" {
+		return r.Name
+	}
+	s := redactURL(r.URL)
+	if r.Method != http.MethodGet {
+		s = r.Method + " " + s
+	}
+	return s
 }
 
 func connTag(id int) string { return "#" + strconv.Itoa(id) }

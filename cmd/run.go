@@ -73,6 +73,11 @@ with --repeat shows a cold first round followed by warm ones. Each row is
 tagged with the connection it used, and the connections are listed under the
 chart, so rows with the same tag shared one.
 
+With --repeat above 1, a table under the chart sets each request's first round
+beside the median of its later rounds, phase by phase. Failed rounds are left
+out of the median, and the line says how many there were. Piped, the URLs are
+never shortened, however long the lines get.
+
 Redirects are followed, up to --max-redirects from each request. Every hop is
 a request of its own, drawn on a row under the one that led to it. A redirect
 left unfollowed at the limit counts as a failed request.
@@ -327,8 +332,14 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		return &exitError{1, writeErr}
 	}
 	if !asJSON {
-		// An interrupted run still draws what it collected.
-		if err := render.Waterfall(out, run, render.Options{Width: termWidth(out), Color: color}); err != nil {
+		// An interrupted run still draws what it collected. Whatever reads a
+		// pipe needs the whole URL more than a short line.
+		width := termWidth(out)
+		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0}
+		if err := render.Waterfall(out, run, ropts); err != nil {
+			return &exitError{1, err}
+		}
+		if err := render.Summary(out, run, ropts); err != nil {
 			return &exitError{1, err}
 		}
 	}
