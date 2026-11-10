@@ -36,7 +36,7 @@ func TestJSON(t *testing.T) {
 				Attempts: 1,
 			},
 			want: `{"seq":1,"round":2,"hop":0,"name":"login","started_at":"2026-10-12T06:14:03.218417Z","offset_ms":650.004,` +
-				`"method":"POST","url":"https://example.com/?a=1&b=2","request_headers":{"Accept-Encoding":["gzip"],"Authorization":["Bearer xxxxx"]},"request_body_bytes":17,"status":200,"proto":"HTTP/2.0","body_bytes":1256,"location":null,` +
+				`"method":"POST","url":"https://example.com/?a=1&b=2","request_headers":{"Accept-Encoding":["gzip"],"Authorization":["Bearer xxxxx"]},"request_body_bytes":17,"status":200,"proto":"HTTP/2.0","body_bytes":1256,"body":null,"body_encoding":"","body_error":"","location":null,` +
 				`"conn_id":1,"reused":false,"remote_addr":"93.184.216.34:443","local_addr":"192.168.1.20:51844",` +
 				`"tls_version":"TLS 1.3","tls_resumed":false,"alpn":"h2",` +
 				`"attempts":1,"resolved_ips":["93.184.216.34","2606:2800:220:1::1"],"dial_attempts":1,` +
@@ -53,7 +53,7 @@ func TestJSON(t *testing.T) {
 				Error:    "dial tcp: lookup nope.invalid: no such host",
 			},
 			want: `{"seq":0,"round":0,"hop":0,"name":"","started_at":"2026-10-12T06:14:03.218417Z","offset_ms":0,` +
-				`"method":"GET","url":"https://nope.invalid/","request_headers":{},"request_body_bytes":0,"status":0,"proto":"","body_bytes":0,"location":null,` +
+				`"method":"GET","url":"https://nope.invalid/","request_headers":{},"request_body_bytes":0,"status":0,"proto":"","body_bytes":0,"body":null,"body_encoding":"","body_error":"","location":null,` +
 				`"conn_id":0,"reused":false,"remote_addr":"","local_addr":"",` +
 				`"tls_version":"","tls_resumed":false,"alpn":"",` +
 				`"attempts":1,"resolved_ips":[],"dial_attempts":0,` +
@@ -68,6 +68,29 @@ func TestJSON(t *testing.T) {
 		}
 		if got := b.String(); got != tt.want+"\n" {
 			t.Errorf("%s:\n got %s\nwant %s", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestJSONBody(t *testing.T) {
+	tests := []struct {
+		content *record.Content
+		want    string
+	}{
+		{nil, `"body":null,"body_encoding":"","body_error":""`},
+		{&record.Content{}, `"body":"","body_encoding":"","body_error":""`},
+		{&record.Content{Body: []byte(`{"a":"<b>"}`)}, `"body":"{\"a\":\"<b>\"}","body_encoding":"","body_error":""`},
+		{&record.Content{Body: []byte{0xff, 0xd8, 0xff}}, `"body":"/9j/","body_encoding":"base64","body_error":""`},
+		{&record.Content{Error: "the body is br-encoded"}, `"body":null,"body_encoding":"","body_error":"the body is br-encoded"`},
+	}
+	for _, tt := range tests {
+		e := record.Entry{Response: &record.Response{Status: 200, Content: tt.content}}
+		var b strings.Builder
+		if err := JSON(&b, e); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(b.String(), tt.want) {
+			t.Errorf("content %+v:\n got %s\nwant it to have %s", tt.content, b.String(), tt.want)
 		}
 	}
 }

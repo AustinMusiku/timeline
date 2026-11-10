@@ -143,6 +143,7 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.Bool("show-body", false, "with --json, write each response's body")
 	f.Bool("cookies", false, "keep the cookies responses set and send them with later requests")
 	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
 	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
@@ -281,6 +282,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	asJSON, bodies := viper.GetBool("json"), viper.GetBool("show-body")
+	if bodies && !asJSON {
+		return errors.New("--show-body needs --json")
+	}
 
 	reqs, err := requests(cmd.Flags(), args, cmd.InOrStdin())
 	if err != nil {
@@ -312,8 +317,8 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		MaxRedirects: viper.GetInt("max-redirects"),
 		TLS:          tlsConf,
 		Cookies:      viper.GetBool("cookies"),
+		Bodies:       bodies,
 	}
-	asJSON := viper.GetBool("json")
 	var writeErr error
 	if asJSON {
 		opts.OnEntry = func(e record.Entry) {

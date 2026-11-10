@@ -1,9 +1,11 @@
 package render
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AustinMusiku/timeline/internal/record"
 )
@@ -11,7 +13,8 @@ import (
 // jsonEntry is one line of JSON output. Every key is always present, so a
 // phase that did not happen is zero, a request with no response has status 0
 // and one with no connection has conn_id 0. location is null for a response
-// without the header. request_headers hides credentials.
+// without the header, and body is null unless the body was read.
+// request_headers hides credentials.
 type jsonEntry struct {
 	Seq              int                 `json:"seq"`
 	Round            int                 `json:"round"`
@@ -26,6 +29,9 @@ type jsonEntry struct {
 	Status           int                 `json:"status"`
 	Proto            string              `json:"proto"`
 	BodyBytes        int64               `json:"body_bytes"`
+	Body             *string             `json:"body"`
+	BodyEncoding     string              `json:"body_encoding"`
+	BodyError        string              `json:"body_error"`
 	Location         *string             `json:"location"`
 	ConnID           int                 `json:"conn_id"`
 	Reused           bool                `json:"reused"`
@@ -88,11 +94,27 @@ func JSON(w io.Writer, e record.Entry) error {
 			loc = redactURL(loc)
 			line.Location = &loc
 		}
+		if c := r.Content; c != nil {
+			line.Body, line.BodyEncoding, line.BodyError = content(c)
+		}
 	}
 
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false) // leave the & in a query string alone
 	return enc.Encode(line)
+}
+
+// content is a body as JSON text, or as base64 when it isn't UTF-8, as in HAR.
+func content(c *record.Content) (body *string, encoding, errText string) {
+	switch {
+	case c.Error != "":
+		return nil, "", c.Error
+	case utf8.Valid(c.Body):
+		s := string(c.Body)
+		return &s, "", ""
+	}
+	s := base64.StdEncoding.EncodeToString(c.Body)
+	return &s, "base64", ""
 }
 
 // millis is d in milliseconds, rounded to the microsecond.
