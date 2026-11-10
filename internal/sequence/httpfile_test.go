@@ -14,7 +14,7 @@ import (
 
 // env is the environment the tests see.
 func env(name string) (string, bool) {
-	v, ok := map[string]string{"TOKEN": "secret", "HOST": "api.example.com"}[name]
+	v, ok := map[string]string{"TOKEN": "secret", "HOST": "api.example.com", "HOST_URL": "https://api.example.com"}[name]
 	return v, ok
 }
 
@@ -157,6 +157,9 @@ POST {{base}}/filled
 <@ ./body.json
 
 ###
+POST {{$processEnv HOST_URL}}/{{ version }} HTTP/1.1
+
+###
 @version = v1
 @user = me
 `
@@ -172,6 +175,7 @@ POST {{base}}/filled
 		},
 		{Method: "POST", URL: "https://api.example.com/v1/raw", Body: []byte(`{"token": "{{$processEnv TOKEN}}"}`)},
 		{Method: "POST", URL: "https://api.example.com/v1/filled", Body: []byte(`{"token": "secret"}`)},
+		{Method: "POST", URL: "https://api.example.com/v1"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)

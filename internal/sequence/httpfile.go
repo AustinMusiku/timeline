@@ -326,9 +326,12 @@ func (p *parser) directive(c string) error {
 	return nil
 }
 
+// word is a run of non-spaces, with each {{variable}} kept whole.
+var word = regexp.MustCompile(`(?:\{\{.*?\}\}|\S)+`)
+
 // requestLine reads "[METHOD] URL [HTTP/version]".
 func (p *parser) requestLine(s string) error {
-	fields := strings.Fields(s)
+	fields := word.FindAllString(s, -1)
 	if len(fields) > 1 && strings.HasPrefix(fields[len(fields)-1], "HTTP/") {
 		fields = fields[:len(fields)-1]
 	}
