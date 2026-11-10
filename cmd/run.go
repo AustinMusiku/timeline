@@ -97,7 +97,14 @@ none.
 request_headers maps each header timeline set to its values. Credentials are
 hidden: an Authorization keeps its scheme and a Cookie its names. A password in
 url or location shows as xxxxx. request_body_bytes is the size of the body
-sent; the body itself is never written out.
+sent; the request body itself is never written out.
+
+--show-body, which needs --json, fills in body with each response's body,
+gunzipped and otherwise as it arrived. It is base64 when it is not UTF-8 text,
+and body_encoding is then base64. body is null without --show-body, when there
+was no response or the body was cut off, and when the body is over 16 MiB or
+encoded with something other than gzip, with body_error saying which. Bodies
+are not redacted.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
@@ -119,6 +126,7 @@ still draws what it collected.`,
   timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
   timeline run -f flow.http
   timeline run -n 3 --json -f flow.http
+  timeline run --json --show-body -f flow.http | jq -r 'select(.status >= 400) | .body'
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		file, _ := cmd.Flags().GetString("file")

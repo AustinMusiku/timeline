@@ -46,6 +46,7 @@ more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 | `--cert`              |         | PEM file of a client certificate                     |
 | `--key`               |         | PEM file of the client certificate's key             |
 | `--json`              | off     | One line of JSON per request instead of drawing      |
+| `--show-body`         | off     | With `--json`, each response's body as well          |
 | `--color`             | `auto`  | `auto`, `always` or `never`                          |
 
 `timeline run --help` has the full reference.
@@ -286,6 +287,9 @@ timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / leng
   "status":200,
   "proto":"HTTP/2.0",
   "body_bytes":12085,
+  "body":null,
+  "body_encoding":"",
+  "body_error":"",
   "location":null,
   "conn_id":1,
   "reused":false,
@@ -318,11 +322,28 @@ counts them from 0 for the URL that was given. `name` is the request's
 `# @name` from a sequence file, and empty otherwise. `request_headers` are the
 headers timeline set, with credentials hidden; Go's client adds `Host`,
 `User-Agent` and the like as it sends. `request_body_bytes` is the size of the
-body sent; the body itself is never written out. `location` is the response's
-`Location` header, or `null` if it had none. `conn_id` is the number the
-waterfall shows, and 0 for a request that never got a connection.
+body sent; the request body itself is never written out. `location` is the
+response's `Location` header, or `null` if it had none. `conn_id` is the number
+the waterfall shows, and 0 for a request that never got a connection.
 `resolved_ips` and `dial_attempts` describe the request's own dial, so they are
 empty and 0 on a reused connection. `timeline run --help` describes the format.
+
+### Response bodies
+
+```sh
+timeline run --json --show-body -f flow.http | jq -r 'select(.status >= 400) | .body'
+```
+
+`--show-body` fills in `body` with each response's body, gunzipped and
+otherwise as it arrived, so you can see what a POST returned without sending it
+again. It goes with `--json` only, and the waterfall never shows a body. A body
+that isn't UTF-8 text is base64, with `body_encoding` set to `base64`. Each hop
+of a redirect has its own body.
+
+`body` stays `null` without `--show-body`, for a request that got no response
+or failed partway through its body, and for a body timeline can't read: one over
+16 MiB, or encoded with something other than gzip. `body_error` says which of
+the last two. Bodies are not redacted, so a login's body shows its token.
 
 ## Configuration
 

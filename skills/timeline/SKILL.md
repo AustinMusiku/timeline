@@ -5,7 +5,7 @@ description: |
   download) with the timeline CLI. Use when a URL or API is slow, to compare a
   cold first request with warm repeats, to time a multi-step flow such as
   logging in and then fetching, or to check redirects, connection reuse and TLS.
-  It never prints response bodies, so use curl to see what a server returned.
+  Response bodies come only with `--json --show-body`.
 license: MIT
 ---
 
@@ -58,6 +58,15 @@ timeline run --json -n 5 https://api.example.com/health | jq -c '{round, status,
 
 A redirect's hops share a `seq`, with `hop` counting from 0.
 
+Add `--show-body` to get each response's body in `body`, gunzipped, or base64
+when `body_encoding` is `base64`. It needs `--json`. Use it to see what a POST
+returned instead of sending it again with curl. `body_error` says why a body is
+missing, for example when it is over 16 MiB.
+
+```sh
+timeline run --json --show-body -f flow.http | jq -c 'select(.status >= 400) | {name, status, body}'
+```
+
 ## Requests with headers, auth and bodies
 
 The flags are curl's: `-X`, `-H 'Name: value'`, `-u user:password`, `-d`,
@@ -69,8 +78,9 @@ terminal. Keep secrets in environment variables, as in
 
 curl flags that timeline lacks are errors that say what to use instead:
 redirects are always followed (`--max-redirects` caps them), `--timeout`
-replaces `-m`, `-X HEAD` replaces `-I`, and there is no `-o`, `-s`, `-v` or
-`-w`, since `--json` has every request's timings, status and connection.
+replaces `-m`, `-X HEAD` replaces `-I`, `--json --show-body` replaces `-o`,
+and there is no `-s`, `-v` or `-w`, since `--json` has every request's timings,
+status and connection.
 
 ## Multi-step flows
 
