@@ -912,6 +912,8 @@ func TestRunHidesSentTokensInBodies(t *testing.T) {
 	}))
 	defer srv.Close()
 	file := sequenceFile(t, srv, loginFlow)
+	// Only the command line shows secrets.
+	t.Setenv("TIMELINE_SHOW_SECRETS", "true")
 
 	out, err := execute(t, "run", "--json", "--show-body", "-f", file)
 	if err != nil {
@@ -926,6 +928,14 @@ func TestRunHidesSentTokensInBodies(t *testing.T) {
 		if l["body"] != want[i] {
 			t.Errorf("line %d (%v) has body %v, want %s", i, l["name"], l["body"], want[i])
 		}
+	}
+
+	out, err = execute(t, "run", "--json", "--show-body", "--show-secrets", "-f", file)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	if n := strings.Count(out, "tok-secret-123"); n != 3 {
+		t.Errorf("with --show-secrets the token shows %d times, want in login's body, account's header and its body\n%s", n, out)
 	}
 }
 

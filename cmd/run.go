@@ -168,6 +168,9 @@ func init() {
 	// Command line only, so no config file can turn certificate checks off.
 	f.BoolP("insecure", "k", false, "skip checking the server's certificate")
 
+	// Command line only, so no config file makes every run show credentials.
+	f.Bool("show-secrets", false, "write the passwords, tokens and cookies that output hides")
+
 	// Command line only, so no config file makes every run read a file.
 	f.StringP("file", "f", "", "read the sequence from a .http file, - for stdin")
 
@@ -327,10 +330,12 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Cookies:      viper.GetBool("cookies"),
 		Bodies:       bodies,
 	}
+	showSecrets, _ := cmd.Flags().GetBool("show-secrets")
 	var writeErr error
 	if asJSON {
+		jopts := render.Options{ShowSecrets: showSecrets}
 		opts.OnEntry = func(e record.Entry) {
-			if err := render.JSON(out, e); err != nil && writeErr == nil {
+			if err := render.JSON(out, e, jopts); err != nil && writeErr == nil {
 				writeErr = err
 			}
 		}
@@ -348,7 +353,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		// An interrupted run still draws what it collected. Whatever reads a
 		// pipe needs the whole URL more than a short line.
 		width := termWidth(out)
-		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0}
+		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0, ShowSecrets: showSecrets}
 		if err := render.Waterfall(out, run, ropts); err != nil {
 			return &exitError{1, err}
 		}

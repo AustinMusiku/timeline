@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net/http"
 	"time"
 	"unicode/utf8"
 
@@ -54,9 +55,17 @@ type jsonEntry struct {
 	Error            string              `json:"error"`
 }
 
-// JSON writes e as one line of JSON, in a single write.
-func JSON(w io.Writer, e record.Entry) error {
+// JSON writes e as one line of JSON, in a single write. Of opts, only
+// ShowSecrets applies.
+func JSON(w io.Writer, e record.Entry, opts Options) error {
 	t, c := e.Timings, e.Conn
+	reqURL, header := redactURL(e.Request.URL), redactHeader(e.Request.Header)
+	if opts.ShowSecrets {
+		reqURL, header = e.Request.URL, e.Request.Header
+		if header == nil {
+			header = http.Header{}
+		}
+	}
 	line := jsonEntry{
 		Seq:              e.Seq,
 		Round:            e.Round,
@@ -65,8 +74,8 @@ func JSON(w io.Writer, e record.Entry) error {
 		StartedAt:        e.Started.UTC().Format("2006-01-02T15:04:05.000000Z"),
 		OffsetMS:         millis(e.Offset),
 		Method:           e.Request.Method,
-		URL:              redactURL(e.Request.URL),
-		RequestHeaders:   redactHeader(e.Request.Header), // {} when empty, not null
+		URL:              reqURL,
+		RequestHeaders:   header, // {} when empty, not null
 		RequestBodyBytes: e.Request.BodySize,
 		ConnID:           c.ID,
 		Reused:           c.Reused,
@@ -91,11 +100,17 @@ func JSON(w io.Writer, e record.Entry) error {
 	if r := e.Response; r != nil {
 		line.Status, line.Proto, line.BodyBytes = r.Status, r.Proto, r.BodySize
 		if loc := r.Header.Get("Location"); loc != "" {
-			loc = redactURL(loc)
+			if !opts.ShowSecrets {
+				loc = redactURL(loc)
+			}
 			line.Location = &loc
 		}
 		if c := r.Content; c != nil {
-			line.Body, line.BodyEncoding, line.BodyError = content(c, append(credentials(e), c.Hide...))
+			var secrets []string
+			if !opts.ShowSecrets {
+				secrets = append(credentials(e), c.Hide...)
+			}
+			line.Body, line.BodyEncoding, line.BodyError = content(c, secrets)
 		}
 	}
 
