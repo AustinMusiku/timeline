@@ -53,7 +53,7 @@ type Response struct {
 // response is missing.
 type Responses map[int]*Response
 
-// maxKept bounds a kept body.
+// maxKept bounds a body read into memory.
 const maxKept = 16 << 20
 
 type Options struct {
@@ -74,6 +74,9 @@ type Options struct {
 	// OnEntry, if set, is called with each entry as its request finishes,
 	// one call at a time.
 	OnEntry func(record.Entry)
+	// Bodies reads each response's body into the entry OnEntry gets. The
+	// entries Run returns leave it out, so a long run doesn't hold them all.
+	Bodies bool
 }
 
 // Run sends reqs in order, Repeat times over, and returns one entry per
@@ -163,12 +166,17 @@ send:
 				defer close(done[seq])
 
 				add := func(e record.Entry) {
-					*chain = append(*chain, e)
 					if opts.OnEntry != nil {
 						emit.Lock()
 						opts.OnEntry(e)
 						emit.Unlock()
 					}
+					if r := e.Response; r != nil && r.Content != nil {
+						without := *r
+						without.Content = nil
+						e.Response = &without
+					}
+					*chain = append(*chain, e)
 				}
 
 				req := tmpl
@@ -186,10 +194,20 @@ send:
 				}
 
 				for hop := 0; req != nil; hop++ {
-					e, resp := do(ctx, client, &seen, req, opts.Timeout, started, reqs[seq].Keep)
+					keep := reqs[seq].Keep
+					e, resp := do(ctx, client, &seen, req, opts.Timeout, started, keep || opts.Bodies)
 					e.Seq, e.Round, e.Hop = seq, round, hop
 					if hop == 0 {
 						e.Request.Name = reqs[seq].Name
+					}
+					if opts.Bodies && resp != nil {
+						e.Response.Content = &record.Content{Body: resp.Body}
+						if resp.BodyErr != nil {
+							e.Response.Content.Error = resp.BodyErr.Error()
+						}
+					}
+					if !keep {
+						resp = nil
 					}
 					got[seq] = resp
 
@@ -330,7 +348,7 @@ func newRequest(r Request) (*http.Request, error) {
 }
 
 // do sends one request and reads its body to the end. With keep, it also
-// returns what the request got.
+// returns what the request got, body included.
 func do(ctx context.Context, client *http.Client, seen *conns, tmpl *http.Request, timeout time.Duration, origin time.Time, keep bool) (record.Entry, *Response) {
 	reqCtx := ctx
 	if timeout > 0 {
