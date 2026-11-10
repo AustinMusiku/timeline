@@ -2,6 +2,18 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.11.0] - 2026-11-10
+
+### Features
+
+- Read response bodies when asked
+- Add --show-body to write bodies in the JSON
+- Point -o and -i at --show-body
+
+### Fixes
+
+- Keep {{variables}} whole in the request line
+
 ## [0.10.0] - 2026-11-07
 
 ### Features
