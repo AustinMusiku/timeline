@@ -103,8 +103,13 @@ sent; the request body itself is never written out.
 gunzipped and otherwise as it arrived. It is base64 when it is not UTF-8 text,
 and body_encoding is then base64. body is null without --show-body, when there
 was no response or the body was cut off, and when the body is over 16 MiB or
-encoded with something other than gzip, with body_error saying which. Bodies
-are not redacted.
+encoded with something other than gzip, with body_error saying which.
+
+A body hides, as xxxxx, any value of 8 characters or more that the request
+sent as a credential (Authorization, Proxy-Authorization, Cookie or a URL
+password), that the response set as a cookie, or that a later request in the
+--file sends in one of those headers. Requests still send the real values.
+--show-secrets, read from the command line only, hides nothing anywhere.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and

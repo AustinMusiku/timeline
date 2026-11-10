@@ -47,6 +47,7 @@ more, write the sequence in a [file](#sequence-files) and run it with `-f`.
 | `--key`               |         | PEM file of the client certificate's key             |
 | `--json`              | off     | One line of JSON per request instead of drawing      |
 | `--show-body`         | off     | With `--json`, each response's body as well          |
+| `--show-secrets`      | off     | Show the passwords, tokens and cookies output hides  |
 | `--color`             | `auto`  | `auto`, `always` or `never`                          |
 
 `timeline run --help` has the full reference.
@@ -66,9 +67,11 @@ timeline run -u me https://api.example.com/me
 `Authorization` from `-H` wins over `-u`. Credentials are not sent on to
 another host when a redirect leads there.
 
-Output never shows credentials: a password in a URL becomes `xxxxx`, an
+Output hides credentials: a password in a URL becomes `xxxxx`, an
 `Authorization` keeps only its scheme (`Bearer xxxxx`), and a `Cookie` only its
-names (`session=xxxxx`).
+names (`session=xxxxx`). [Response bodies](#response-bodies) hide them too.
+`--show-secrets` shows them all, for when you need the real values, such as to
+decode a token. It is read from the command line only.
 
 ### Request bodies
 
@@ -343,7 +346,25 @@ of a redirect has its own body.
 `body` stays `null` without `--show-body`, for a request that got no response
 or failed partway through its body, and for a body timeline can't read: one over
 16 MiB, or encoded with something other than gzip. `body_error` says which of
-the last two. Bodies are not redacted, so a login's body shows its token.
+the last two.
+
+A body hides credentials as the headers do. Any value of 8 characters or more
+shows as `xxxxx` when:
+
+- the request sent it in `Authorization`, `Proxy-Authorization`, `Cookie` or as
+  the URL's password, as a server that echoes the request would show it
+- the response set it in a `Set-Cookie`
+- a later request in the sequence file sends it in one of those headers, as with
+  the login's token below
+
+```json
+{"name":"login","body":"{\"access_token\": \"xxxxx\", \"refresh_token\": \"r-9f2c...\"}",...}
+{"name":"account","request_headers":{"Authorization":["Bearer xxxxx"]},...}
+```
+
+Only the output hides them, so the account request still sends the real token.
+Other secrets show as they are, such as a `refresh_token` that no request sends.
+`--show-secrets` shows every value.
 
 ## Configuration
 
@@ -364,8 +385,8 @@ color: never
 
 `--config` points at a different file. `NO_COLOR` is honoured. `-H`, `-u` and
 the body flags can carry credentials, so they are read from the command line
-only. So is `-k`, so that no config file can turn certificate checks off.
-`--cacert`, `--cert` and `--key` are paths, and can be set in either place.
+only. So is `-k`, so that no config file can turn certificate checks off, and
+`--show-secrets`, so that none can make every run show credentials. `--cacert`, `--cert` and `--key` are paths, and can be set in either place.
 
 ## Exit status
 
