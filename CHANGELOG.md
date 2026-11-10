@@ -2,6 +2,17 @@
 
 Notable changes to timeline. Versions follow [Semantic Versioning](https://semver.org).
 
+## [0.11.1] - 2026-11-10
+
+### Features
+
+- Add --show-secrets to stop hiding credentials
+
+### Fixes
+
+- Hide a request's own credentials in its body
+- Hide body values that later steps send as credentials
+
 ## [0.11.0] - 2026-11-10
 
 ### Features
