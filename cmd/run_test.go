@@ -168,6 +168,7 @@ func TestRunExitStatus(t *testing.T) {
 		{[]string{"--config", badConfig, srv.URL}, 2},
 		{[]string{"-f", filepath.Join(dir, "missing.http")}, 2},
 		{[]string{srv.URL, "example.com"}, 2},
+		{[]string{"--show-body", srv.URL}, 2},
 	}
 	for _, tc := range tests {
 		before := hits.Load()
@@ -337,6 +338,36 @@ func TestRunJSONMarksEachHop(t *testing.T) {
 	}
 	if loc, ok := got[1]["location"]; got[0]["location"] != "/final" || !ok || loc != nil {
 		t.Errorf("location is %v then %v, want /final then null", got[0]["location"], got[1]["location"])
+	}
+}
+
+func TestRunJSONShowsBodiesWhenAsked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"message":"Invalid credentials"}`)
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		args []string
+		want any
+	}{
+		{[]string{"--json", srv.URL}, nil},
+		{[]string{"--json", "--show-body", srv.URL}, `{"message":"Invalid credentials"}`},
+	} {
+		out, err := execute(t, append([]string{"run"}, tc.args...)...)
+		if err != nil {
+			t.Fatalf("%v: run failed: %v\n%s", tc.args, err, out)
+		}
+		got := lines(t, out)
+		if body, ok := got[0]["body"]; !ok || body != tc.want {
+			t.Errorf("%v: body is %#v, want %#v\n%s", tc.args, body, tc.want, out)
+		}
+	}
+
+	_, err := execute(t, "run", "--show-body", srv.URL)
+	if err == nil || err.Error() != "--show-body needs --json" {
+		t.Errorf("error %v, want --show-body needs --json", err)
 	}
 }
 
@@ -555,7 +586,7 @@ func TestRunAnswersCurlOnlyFlags(t *testing.T) {
 		{[]string{"-L"}, "unknown flag -L: timeline already follows redirects, up to --max-redirects"},
 		{[]string{"--location"}, "unknown flag --location: timeline already follows redirects, up to --max-redirects"},
 		{[]string{"-sS"}, "unknown flag -s: timeline has no progress meter, and always shows errors"},
-		{[]string{"-o", "/dev/null"}, "unknown flag -o: timeline never prints the body"},
+		{[]string{"-o", "/dev/null"}, "unknown flag -o: --json --show-body writes each response's body"},
 		{[]string{"--max-time", "5"}, "unknown flag --max-time: --timeout sets the time limit for each request"},
 		{[]string{"--nope"}, "unknown flag: --nope"},
 	}

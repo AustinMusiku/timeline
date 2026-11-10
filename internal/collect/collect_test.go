@@ -602,6 +602,57 @@ func TestOnEntrySeesEachEntryAsItFinishes(t *testing.T) {
 	}
 }
 
+func TestBodiesGoToOnEntryOnly(t *testing.T) {
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	io.WriteString(zw, "unzipped")
+	zw.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/moved":
+			http.Redirect(w, r, "/", http.StatusFound)
+		case "/gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(gz.Bytes())
+		case "/br":
+			w.Header().Set("Content-Encoding", "br")
+			io.WriteString(w, "squashed")
+		case "/empty":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			hello(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	reqs := []Request{{URL: srv.URL + "/moved"}, {URL: srv.URL + "/gzip"}, {URL: srv.URL + "/br"}, {URL: srv.URL + "/empty"}}
+	for _, bodies := range []bool{true, false} {
+		var seen []string
+		opts := Options{Bodies: bodies, MaxRedirects: 1, OnEntry: func(e record.Entry) {
+			if c := e.Response.Content; c != nil {
+				seen = append(seen, fmt.Sprintf("%q %s", c.Body, c.Error))
+			}
+		}}
+		got, err := run(t.Context(), transport(srv), reqs, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want []string
+		if bodies {
+			want = []string{`"<a href=\"/\">Found</a>.\n\n" `, `"hello" `, `"unzipped" `, `"" the body is br-encoded`, `"" `}
+		}
+		if !slices.Equal(seen, want) {
+			t.Errorf("bodies %v: OnEntry saw %q, want %q", bodies, seen, want)
+		}
+		for _, e := range got.Entries {
+			if e.Response == nil || e.Response.Content != nil {
+				t.Errorf("bodies %v: returned entry %s has response %+v, want one without a body", bodies, e.Request.URL, e.Response)
+			}
+		}
+	}
+}
+
 func TestCancelReturnsWhatWasCollected(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

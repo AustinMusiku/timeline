@@ -97,7 +97,14 @@ none.
 request_headers maps each header timeline set to its values. Credentials are
 hidden: an Authorization keeps its scheme and a Cookie its names. A password in
 url or location shows as xxxxx. request_body_bytes is the size of the body
-sent; the body itself is never written out.
+sent; the request body itself is never written out.
+
+--show-body, which needs --json, fills in body with each response's body,
+gunzipped and otherwise as it arrived. It is base64 when it is not UTF-8 text,
+and body_encoding is then base64. body is null without --show-body, when there
+was no response or the body was cut off, and when the body is over 16 MiB or
+encoded with something other than gzip, with body_error saying which. Bodies
+are not redacted.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
@@ -119,6 +126,7 @@ still draws what it collected.`,
   timeline run --cacert internal-ca.pem --cert client.pem https://api.internal.example.com/health
   timeline run -f flow.http
   timeline run -n 3 --json -f flow.http
+  timeline run --json --show-body -f flow.http | jq -r 'select(.status >= 400) | .body'
   timeline run --json -n 5 https://example.com | jq -s 'map(.wait_ms) | add / length'`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		file, _ := cmd.Flags().GetString("file")
@@ -143,6 +151,7 @@ func init() {
 	f.Int("max-redirects", 10, "redirects to follow from each request, 0 for none")
 	f.StringP("method", "X", "", "method for every request, GET when empty")
 	f.Bool("json", false, "write one line of JSON per request instead of drawing")
+	f.Bool("show-body", false, "with --json, write each response's body")
 	f.Bool("cookies", false, "keep the cookies responses set and send them with later requests")
 	f.String("cacert", "", "PEM file of CA certificates to trust in place of the system's")
 	f.String("cert", "", "PEM file of a client certificate, with its key unless --key is given")
@@ -281,6 +290,10 @@ func runSequence(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	asJSON, bodies := viper.GetBool("json"), viper.GetBool("show-body")
+	if bodies && !asJSON {
+		return errors.New("--show-body needs --json")
+	}
 
 	reqs, err := requests(cmd.Flags(), args, cmd.InOrStdin())
 	if err != nil {
@@ -312,8 +325,8 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		MaxRedirects: viper.GetInt("max-redirects"),
 		TLS:          tlsConf,
 		Cookies:      viper.GetBool("cookies"),
+		Bodies:       bodies,
 	}
-	asJSON := viper.GetBool("json")
 	var writeErr error
 	if asJSON {
 		opts.OnEntry = func(e record.Entry) {

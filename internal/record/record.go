@@ -63,6 +63,15 @@ type Response struct {
 	// BodySize counts the body bytes as the server sent them, before any
 	// content decoding.
 	BodySize int64
+	// Content is the body after decoding, nil unless it was asked for.
+	Content *Content
+}
+
+// Content is a response body after gzip decoding, as HAR's content is.
+type Content struct {
+	Body []byte
+	// Error says why the body could not be decoded. Body is then nil.
+	Error string
 }
 
 // Timings splits a request into consecutive and non-overlapping phases.
