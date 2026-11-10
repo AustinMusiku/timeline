@@ -24,6 +24,8 @@ type Options struct {
 	// FullLabels never shortens a label, however long the rows get. The bars
 	// stay as wide as Width would make them.
 	FullLabels bool
+	// ShowSecrets writes the passwords, tokens and cookies otherwise hidden.
+	ShowSecrets bool
 }
 
 // SGR foreground codes; adding 10 gives the background. Red is for failures.
@@ -81,7 +83,7 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 	for i, e := range run.Entries {
 		span = max(span, e.Offset+e.Timings.Total())
 		seqW = max(seqW, len(strconv.Itoa(e.Seq+1)))
-		labels[i] = label(e.Request)
+		labels[i] = label(e.Request, opts)
 		if e.Hop > 0 {
 			labels[i] = "↳ " + labels[i]
 		}
@@ -186,11 +188,14 @@ func Waterfall(w io.Writer, run *record.Run, opts Options) error {
 }
 
 // label names a request by its name, or else by its method and URL.
-func label(r record.Request) string {
+func label(r record.Request, opts Options) string {
 	if r.Name != "" {
 		return r.Name
 	}
-	s := redactURL(r.URL)
+	s := r.URL
+	if !opts.ShowSecrets {
+		s = redactURL(s)
+	}
 	if r.Method != http.MethodGet {
 		s = r.Method + " " + s
 	}

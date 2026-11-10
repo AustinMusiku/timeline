@@ -34,7 +34,7 @@ func ParseHTTP(r io.Reader, name, dir string, lookup func(string) (string, bool)
 		}
 	}
 
-	p := &parser{name: name, dir: dir, lookup: lookup, vars: map[string]variable{}, steps: map[string]named{}}
+	p := &parser{name: name, dir: dir, lookup: lookup, vars: map[string]variable{}, steps: map[string]named{}, secrets: map[int][]responsePath{}}
 	if err := p.definitions(lines); err != nil {
 		return nil, err
 	}
@@ -46,6 +46,17 @@ func ParseHTTP(r io.Reader, name, dir string, lookup func(string) (string, bool)
 	}
 	if err := p.finish(); err != nil {
 		return nil, err
+	}
+	for i, paths := range p.secrets {
+		p.reqs[i].Secrets = func(r *collect.Response) []string {
+			var out []string
+			for _, path := range paths {
+				if v, err := path.value(r); err == nil && !slices.Contains(out, v) {
+					out = append(out, v)
+				}
+			}
+			return out
+		}
 	}
 	return p.reqs, nil
 }
@@ -61,8 +72,9 @@ type parser struct {
 	name, dir string
 	lookup    func(string) (string, bool)
 	vars      map[string]variable
-	steps     map[string]named // the named steps read so far
-	n         int              // line number
+	steps     map[string]named       // the named steps read so far
+	secrets   map[int][]responsePath // by step, what later steps send as credentials
+	n         int                    // line number
 	reqs      []collect.Request
 	cur       step
 }
@@ -414,6 +426,16 @@ func (p *parser) finish() error {
 		c.req.Body = []byte(strings.Join(lines, ""))
 	}
 
+	for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie"} {
+		for _, v := range c.req.Header[name] {
+			for _, m := range placeholder.FindAllString(v, -1) {
+				if r, err := parseRef(strings.TrimSpace(m[2 : len(m)-2])); err == nil {
+					i := p.steps[r.step].index
+					p.secrets[i] = append(p.secrets[i], r.path)
+				}
+			}
+		}
+	}
 	if len(c.after) > 0 {
 		for _, i := range c.after {
 			p.reqs[i].Keep = true

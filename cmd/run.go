@@ -103,8 +103,13 @@ sent; the request body itself is never written out.
 gunzipped and otherwise as it arrived. It is base64 when it is not UTF-8 text,
 and body_encoding is then base64. body is null without --show-body, when there
 was no response or the body was cut off, and when the body is over 16 MiB or
-encoded with something other than gzip, with body_error saying which. Bodies
-are not redacted.
+encoded with something other than gzip, with body_error saying which.
+
+A body hides, as xxxxx, any value of 8 characters or more that the request
+sent as a credential (Authorization, Proxy-Authorization, Cookie or a URL
+password), that the response set as a cookie, or that a later request in the
+--file sends in one of those headers. Requests still send the real values.
+--show-secrets, read from the command line only, hides nothing anywhere.
 
 conn_id numbers the connections of the run from 1, and is 0 for a request
 that never got one. reused means the connection was already open, and
@@ -167,6 +172,9 @@ func init() {
 
 	// Command line only, so no config file can turn certificate checks off.
 	f.BoolP("insecure", "k", false, "skip checking the server's certificate")
+
+	// Command line only, so no config file makes every run show credentials.
+	f.Bool("show-secrets", false, "write the passwords, tokens and cookies that output hides")
 
 	// Command line only, so no config file makes every run read a file.
 	f.StringP("file", "f", "", "read the sequence from a .http file, - for stdin")
@@ -327,10 +335,12 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		Cookies:      viper.GetBool("cookies"),
 		Bodies:       bodies,
 	}
+	showSecrets, _ := cmd.Flags().GetBool("show-secrets")
 	var writeErr error
 	if asJSON {
+		jopts := render.Options{ShowSecrets: showSecrets}
 		opts.OnEntry = func(e record.Entry) {
-			if err := render.JSON(out, e); err != nil && writeErr == nil {
+			if err := render.JSON(out, e, jopts); err != nil && writeErr == nil {
 				writeErr = err
 			}
 		}
@@ -348,7 +358,7 @@ func runSequence(cmd *cobra.Command, args []string) error {
 		// An interrupted run still draws what it collected. Whatever reads a
 		// pipe needs the whole URL more than a short line.
 		width := termWidth(out)
-		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0}
+		ropts := render.Options{Width: width, Color: color, FullLabels: width == 0, ShowSecrets: showSecrets}
 		if err := render.Waterfall(out, run, ropts); err != nil {
 			return &exitError{1, err}
 		}

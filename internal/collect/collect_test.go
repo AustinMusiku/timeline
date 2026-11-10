@@ -653,6 +653,21 @@ func TestBodiesGoToOnEntryOnly(t *testing.T) {
 	}
 }
 
+func TestBodiesCarryTheirSecrets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(hello))
+	defer srv.Close()
+
+	var hide []string
+	secrets := func(r *Response) []string { return []string{string(r.Body)} }
+	opts := Options{Bodies: true, OnEntry: func(e record.Entry) { hide = e.Response.Content.Hide }}
+	if _, err := run(t.Context(), transport(srv), []Request{{URL: srv.URL, Secrets: secrets}}, opts); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(hide, []string{"hello"}) {
+		t.Errorf("Hide is %q, want [hello]", hide)
+	}
+}
+
 func TestCancelReturnsWhatWasCollected(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

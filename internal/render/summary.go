@@ -40,7 +40,7 @@ func Summary(w io.Writer, run *record.Run, opts Options) error {
 	for _, e := range run.Entries {
 		rounds = max(rounds, e.Round+1)
 		if e.Hop == 0 {
-			labels[e.Seq] = label(e.Request)
+			labels[e.Seq] = label(e.Request, opts)
 		}
 		k := key{e.Seq, e.Round}
 		t := byKey[k]

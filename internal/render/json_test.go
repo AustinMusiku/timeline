@@ -63,7 +63,7 @@ func TestJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		var b strings.Builder
-		if err := JSON(&b, tt.e); err != nil {
+		if err := JSON(&b, tt.e, Options{}); err != nil {
 			t.Fatalf("%s: %v", tt.name, err)
 		}
 		if got := b.String(); got != tt.want+"\n" {
@@ -86,7 +86,7 @@ func TestJSONBody(t *testing.T) {
 	for _, tt := range tests {
 		e := record.Entry{Response: &record.Response{Status: 200, Content: tt.content}}
 		var b strings.Builder
-		if err := JSON(&b, e); err != nil {
+		if err := JSON(&b, e, Options{}); err != nil {
 			t.Fatal(err)
 		}
 		if !strings.Contains(b.String(), tt.want) {

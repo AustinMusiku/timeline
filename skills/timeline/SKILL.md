@@ -67,6 +67,15 @@ missing, for example when it is over 16 MiB.
 timeline run --json --show-body -f flow.http | jq -c 'select(.status >= 400) | {name, status, body}'
 ```
 
+Credentials show as `xxxxx` in `request_headers`, `url` and bodies alike. In a
+body, that covers what the request sent as a credential, the response's
+cookies, and any value a later step sends in `Authorization`, `Proxy-Authorization`
+or `Cookie`, such as a login's `access_token`. Steps still send the real values,
+so pass a token between requests with `{{login.response.body.access_token}}`
+rather than copying it out of the output. When you need a real value, for
+example to decode a JWT's `exp` after a 401, add `--show-secrets`. Don't save
+that output.
+
 ## Requests with headers, auth and bodies
 
 The flags are curl's: `-X`, `-H 'Name: value'`, `-u user:password`, `-d`,

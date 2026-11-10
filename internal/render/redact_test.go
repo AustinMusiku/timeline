@@ -48,6 +48,40 @@ func TestRedactHeader(t *testing.T) {
 	}
 }
 
+func TestBodiesHideCredentials(t *testing.T) {
+	e := record.Entry{
+		Request: record.Request{
+			Method: "GET", URL: "http://me:pass-word-1@example.com/",
+			Header: http.Header{
+				"Authorization":       {"Bearer token-12345"},
+				"Proxy-Authorization": {"Basic a/b/c/d/e="},
+				"Cookie":              {"session=cookie-123; lang=en"},
+			},
+		},
+		Response: &record.Response{
+			Status: 200,
+			Header: http.Header{"Set-Cookie": {"sid=set-cookie-1; Path=/; HttpOnly"}},
+			Content: &record.Content{Body: []byte(`{"auth":"Bearer token-12345","proxy":"a\/b\/c\/d\/e=",` +
+				`"cookie":"session=cookie-123; lang=en","pw":"pass-word-1","sid":"set-cookie-1","short":"en"}`)},
+		},
+	}
+	var b strings.Builder
+	if err := JSON(&b, e, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	want := `"body":"{\"auth\":\"Bearer xxxxx\",\"proxy\":\"xxxxx\",` +
+		`\"cookie\":\"session=xxxxx; lang=en\",\"pw\":\"xxxxx\",\"sid\":\"xxxxx\",\"short\":\"en\"}"`
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("got  %s\nwant it to have %s", b.String(), want)
+	}
+}
+
+func TestMaskHidesTheLongerSecretFirst(t *testing.T) {
+	if got := mask("abcdefgh-ijkl", []string{"abcdefgh", "abcdefgh-ijkl"}); got != "xxxxx" {
+		t.Errorf("got %q, want xxxxx", got)
+	}
+}
+
 func TestPasswordsAreHidden(t *testing.T) {
 	e := record.Entry{
 		Request: record.Request{Method: "GET", URL: "http://me:secret@example.com/"},
@@ -58,7 +92,7 @@ func TestPasswordsAreHidden(t *testing.T) {
 	}
 
 	var b strings.Builder
-	if err := JSON(&b, e); err != nil {
+	if err := JSON(&b, e, Options{}); err != nil {
 		t.Fatal(err)
 	}
 	drawn := draw(t, &record.Run{Entries: []record.Entry{e}}, Options{Width: 80})
@@ -67,5 +101,37 @@ func TestPasswordsAreHidden(t *testing.T) {
 		if strings.Contains(got, "secret") || !strings.Contains(got, "me:xxxxx@") {
 			t.Errorf("the password is not hidden\n%s", got)
 		}
+	}
+}
+
+func TestShowSecretsHidesNothing(t *testing.T) {
+	body := `{"token":"token-12345"}`
+	e := record.Entry{
+		Request: record.Request{
+			Method: "GET", URL: "http://me:secret@example.com/",
+			Header: http.Header{"Authorization": {"Bearer token-12345"}},
+		},
+		Response: &record.Response{
+			Status:  302,
+			Header:  http.Header{"Location": {"https://me:secret@example.com/"}},
+			Content: &record.Content{Body: []byte(body), Hide: []string{"token-12345"}},
+		},
+	}
+	opts := Options{Width: 80, ShowSecrets: true}
+
+	var b strings.Builder
+	if err := JSON(&b, e, opts); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"url":"http://me:secret@example.com/"`, `"Authorization":["Bearer token-12345"]`,
+		`"body":"{\"token\":\"token-12345\"}"`, `"location":"https://me:secret@example.com/"`,
+	} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("the JSON lacks %s\n%s", want, b.String())
+		}
+	}
+	if drawn := draw(t, &record.Run{Entries: []record.Entry{e}}, opts); !strings.Contains(drawn, "me:secret@") {
+		t.Errorf("the waterfall hid the password\n%s", drawn)
 	}
 }
