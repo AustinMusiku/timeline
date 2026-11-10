@@ -586,7 +586,7 @@ func TestRunAnswersCurlOnlyFlags(t *testing.T) {
 		{[]string{"-L"}, "unknown flag -L: timeline already follows redirects, up to --max-redirects"},
 		{[]string{"--location"}, "unknown flag --location: timeline already follows redirects, up to --max-redirects"},
 		{[]string{"-sS"}, "unknown flag -s: timeline has no progress meter, and always shows errors"},
-		{[]string{"-o", "/dev/null"}, "unknown flag -o: timeline never prints the body"},
+		{[]string{"-o", "/dev/null"}, "unknown flag -o: --json --show-body writes each response's body"},
 		{[]string{"--max-time", "5"}, "unknown flag --max-time: --timeout sets the time limit for each request"},
 		{[]string{"--nope"}, "unknown flag: --nope"},
 	}
