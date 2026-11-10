@@ -38,6 +38,9 @@ type Request struct {
 	After []int
 	// Keep holds on to the step's response for a later step's Build.
 	Keep bool
+	// Secrets, if set, returns the values in the step's response that later
+	// steps send as credentials, so output can hide them in its body.
+	Secrets func(*Response) []string
 }
 
 // Response is what a kept step got, from the last hop of its redirects.
@@ -204,6 +207,9 @@ send:
 						e.Response.Content = &record.Content{Body: resp.Body}
 						if resp.BodyErr != nil {
 							e.Response.Content.Error = resp.BodyErr.Error()
+						}
+						if secrets := reqs[seq].Secrets; secrets != nil {
+							e.Response.Content.Hide = secrets(resp)
 						}
 					}
 					if !keep {

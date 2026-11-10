@@ -72,6 +72,8 @@ type Content struct {
 	Body []byte
 	// Error says why the body could not be decoded. Body is then nil.
 	Error string
+	// Hide lists values in Body that later requests send as credentials.
+	Hide []string
 }
 
 // Timings splits a request into consecutive and non-overlapping phases.

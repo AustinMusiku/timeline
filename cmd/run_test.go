@@ -901,6 +901,34 @@ func TestRunUsesAValueFromAnEarlierResponse(t *testing.T) {
 	}
 }
 
+func TestRunHidesSentTokensInBodies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			io.WriteString(w, `{"access_token": "tok-secret-123", "refresh_token": "ref-secret-456"}`)
+		case "/account":
+			fmt.Fprintf(w, `{"you sent": %q}`, r.Header.Get("Authorization"))
+		}
+	}))
+	defer srv.Close()
+	file := sequenceFile(t, srv, loginFlow)
+
+	out, err := execute(t, "run", "--json", "--show-body", "-f", file)
+	if err != nil {
+		t.Fatalf("run failed: %v\n%s", err, out)
+	}
+	got := lines(t, out)
+	want := []string{
+		`{"access_token": "xxxxx", "refresh_token": "ref-secret-456"}`,
+		`{"you sent": "Bearer xxxxx"}`,
+	}
+	for i, l := range got {
+		if l["body"] != want[i] {
+			t.Errorf("line %d (%v) has body %v, want %s", i, l["name"], l["body"], want[i])
+		}
+	}
+}
+
 func TestRunKeepsCookies(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/login" {

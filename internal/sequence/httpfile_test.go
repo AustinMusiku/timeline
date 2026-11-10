@@ -282,4 +282,12 @@ Authorization: Bearer {{token}}
 	if want := "{{login.response.body.$.user.id}}: the body has no user"; err == nil || err.Error() != want {
 		t.Errorf("with a 200: error %v, want %s", err, want)
 	}
+
+	// The token goes out in Authorization; the id and X-Request don't.
+	if reqs[0].Secrets == nil || reqs[1].Secrets != nil || reqs[2].Secrets != nil {
+		t.Fatalf("Secrets set on %v, want login's only", []bool{reqs[0].Secrets != nil, reqs[1].Secrets != nil, reqs[2].Secrets != nil})
+	}
+	if got := reqs[0].Secrets(login); !slices.Equal(got, []string{"tok"}) {
+		t.Errorf("login's secrets are %q, want [tok]", got)
+	}
 }

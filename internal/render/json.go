@@ -95,7 +95,7 @@ func JSON(w io.Writer, e record.Entry) error {
 			line.Location = &loc
 		}
 		if c := r.Content; c != nil {
-			line.Body, line.BodyEncoding, line.BodyError = content(c, credentials(e))
+			line.Body, line.BodyEncoding, line.BodyError = content(c, append(credentials(e), c.Hide...))
 		}
 	}
 
