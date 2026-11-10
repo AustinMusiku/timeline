@@ -48,6 +48,40 @@ func TestRedactHeader(t *testing.T) {
 	}
 }
 
+func TestBodiesHideCredentials(t *testing.T) {
+	e := record.Entry{
+		Request: record.Request{
+			Method: "GET", URL: "http://me:pass-word-1@example.com/",
+			Header: http.Header{
+				"Authorization":       {"Bearer token-12345"},
+				"Proxy-Authorization": {"Basic a/b/c/d/e="},
+				"Cookie":              {"session=cookie-123; lang=en"},
+			},
+		},
+		Response: &record.Response{
+			Status: 200,
+			Header: http.Header{"Set-Cookie": {"sid=set-cookie-1; Path=/; HttpOnly"}},
+			Content: &record.Content{Body: []byte(`{"auth":"Bearer token-12345","proxy":"a\/b\/c\/d\/e=",` +
+				`"cookie":"session=cookie-123; lang=en","pw":"pass-word-1","sid":"set-cookie-1","short":"en"}`)},
+		},
+	}
+	var b strings.Builder
+	if err := JSON(&b, e); err != nil {
+		t.Fatal(err)
+	}
+	want := `"body":"{\"auth\":\"Bearer xxxxx\",\"proxy\":\"xxxxx\",` +
+		`\"cookie\":\"session=xxxxx; lang=en\",\"pw\":\"xxxxx\",\"sid\":\"xxxxx\",\"short\":\"en\"}"`
+	if !strings.Contains(b.String(), want) {
+		t.Errorf("got  %s\nwant it to have %s", b.String(), want)
+	}
+}
+
+func TestMaskHidesTheLongerSecretFirst(t *testing.T) {
+	if got := mask("abcdefgh-ijkl", []string{"abcdefgh", "abcdefgh-ijkl"}); got != "xxxxx" {
+		t.Errorf("got %q, want xxxxx", got)
+	}
+}
+
 func TestPasswordsAreHidden(t *testing.T) {
 	e := record.Entry{
 		Request: record.Request{Method: "GET", URL: "http://me:secret@example.com/"},

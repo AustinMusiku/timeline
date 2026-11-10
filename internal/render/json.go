@@ -95,7 +95,7 @@ func JSON(w io.Writer, e record.Entry) error {
 			line.Location = &loc
 		}
 		if c := r.Content; c != nil {
-			line.Body, line.BodyEncoding, line.BodyError = content(c)
+			line.Body, line.BodyEncoding, line.BodyError = content(c, credentials(e))
 		}
 	}
 
@@ -104,13 +104,14 @@ func JSON(w io.Writer, e record.Entry) error {
 	return enc.Encode(line)
 }
 
-// content is a body as JSON text, or as base64 when it isn't UTF-8, as in HAR.
-func content(c *record.Content) (body *string, encoding, errText string) {
+// content is a body as JSON text with secrets hidden, or as base64 when it
+// isn't UTF-8, as in HAR.
+func content(c *record.Content, secrets []string) (body *string, encoding, errText string) {
 	switch {
 	case c.Error != "":
 		return nil, "", c.Error
 	case utf8.Valid(c.Body):
-		s := string(c.Body)
+		s := mask(string(c.Body), secrets)
 		return &s, "", ""
 	}
 	s := base64.StdEncoding.EncodeToString(c.Body)
